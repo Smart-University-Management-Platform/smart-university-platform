@@ -5,3 +5,4 @@
   - Added docs/adr/0001..0005
   - Added docs/AI_Log.md
   - Added docs/infra/temp_docker-compose.yml
+  - 
