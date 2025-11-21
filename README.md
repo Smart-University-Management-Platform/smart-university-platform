@@ -175,8 +175,10 @@ _Planned structure — actual implementation will grow in later phases._
 ```text
 smart-university-platform/
 ├─ README.md                # Architecture wiki entry point (this file)
-├─ README.fa.md             # Optional Persian version (if present)
+├─ AI_Log.md 
 ├─ docs/
+|  ├─ infra/
+|  |  └─Docker_Compose.yml         
 │  ├─ arch/
 │  │  ├─ Context.md         # C4 Level 1 – System Context
 │  │  └─ Container.md       # C4 Level 2 – Containers
@@ -223,3 +225,10 @@ As the project evolves, additional folders will be added for:
 - Before making a significant change to the design, write or update an ADR.  
 - Keep C4 diagrams and ADRs in sync with the implementation as you move into later phases.  
 - Use issues and pull requests to discuss architectural changes so decisions are recorded and reviewable.
+
+### AI usage (AI Mentor)
+
+Whenever you ask AI for real project help (design, code, debugging, documentation), log it in AI_Log.md:
+
+[YYYY-MM-DD] Team C – Asked AI how to design Saga orchestrator. 
+Answer used to implement order workflow and ADR-0005.

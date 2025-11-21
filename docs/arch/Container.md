@@ -1,11 +1,3 @@
-
----
-
-## 2️⃣ `docs/arch/Container.md` (C4 Level 2 — Containers)
-
-
-
-```markdown
 # C4 – Level 2: Containers
 
 ## Purpose
@@ -55,6 +47,13 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
 - **Responsibility:**
   - Manages **resources** (rooms, labs, equipment) and **bookings**.
   - Enforces **anti-overbooking** (unique `(resourceId, timeslot)`).
+- **Interfaces:**
+  - `GET /resources`
+  - `POST /resources`
+  - `POST /bookings`
+  - `GET /bookings/my`
+  - 
+- **Constraints:** Must prevent two bookings for the same resource and overlapping time.
 - **Data:** Owns **Resource** and **Booking** tables (multi-tenant).
 - **Communication:**
   - Sync HTTP (list resources, create bookings, get booking details).
@@ -67,11 +66,20 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
 - **Responsibility:**
   - Manages products/events and customer orders.
   - Coordinates an **Order Saga** (reserve inventory, charge payment, confirm/cancel).
+- **Interfaces:**
+  - `POST /products` – create product
+  - `GET /products` – list products
+  - `POST /cart/items` – add item to cart
+  - `POST /orders` – start checkout Saga
 - **Data:** Owns **Product**, **Inventory**, **Order**, and **OrderItem** tables.
 - **Communication:**
   - Sync HTTP for product catalogue and cart operations.
   - Publishes/consumes events like `OrderPlaced`, `InventoryReserved`, `OrderConfirmed`, `OrderCancelled`.
   - Integrates with **Payment Provider** (typically via HTTP).
+- **Dependencies:**
+  - Payment Provider (or simulated payment component)
+  - Notification Service (e.g., notify order success)
+  - Message Broker (RabbitMQ) for publishing order events
 
 ---
 
@@ -85,6 +93,9 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
   - Sync HTTP for exam creation and participation.
   - Calls **Notification Service** for “exam started” announcements.
   - This call is protected by a **Circuit Breaker**.
+- **Interfaces:**
+  - `POST /exams`
+  - `POST /exams/{id}/start`
 
 ---
 
@@ -94,6 +105,8 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
   - Sends notifications via Email/SMS/other channels.
   - Consumes events from other services (e.g., `UserRegistered`, `ResourceReserved`, `OrderConfirmed`, `ExamStarted`).
 - **Data:** May store notification templates and delivery logs.
+- **Interfaces:**
+  - `POST /notifications`
 - **Communication:**
   - Exposes HTTP API (e.g., `/notifications`).
   - Subscribes to events on the **Message Broker**.
@@ -106,6 +119,10 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
 - **Responsibility:**
   - Receives sensor readings (e.g., classroom temperature).
   - Stores and exposes data for a simple real-time dashboard.
+- **Interfaces:**
+  - `POST /sensors/{id}/readings`
+  - `GET /sensors/{id}/latest`
+  - 
 - **Data:** Sensor readings, aggregated metrics.
 - **Communication:**
   - HTTP or MQTT/WebSocket ingest.
@@ -123,7 +140,8 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
 - **Communication:**
   - HTTP API to fetch current position / route.
   - Uses **Map/Geocoding Service** when needed.
-
+- **Interfaces:**
+  - `GET /shuttle/location`
 ---
 
 ### Message Broker (e.g., RabbitMQ)
@@ -193,7 +211,10 @@ The platform is implemented as a set of microservices behind an API Gateway, usi
           v              v                  v
    [ Notification ]  [ Marketplace ]   [ Other services ]
 
+## 3. Container Relationships Summary
 
-[ Redis Cache ]  <--- used by multiple services
-
-[ Per-Service Databases ]  <--- data ownership & multi-tenancy per service
+- Web Frontend → API Gateway → Microservices.
+- Microservices → DBs (own schema) and Redis.
+- Microservices ↔ Message Broker for async events.
+- Exam Service → Notification Service with Circuit Breaker.
+- Marketplace Service ↔ Payment Provider (simulated).

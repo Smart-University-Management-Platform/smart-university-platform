@@ -1,0 +1,206 @@
+version: "3.9"
+
+services:
+  gateway:
+    build: ./gateway
+    container_name: gateway
+    ports:
+      - "8080:8080"
+    environment:
+      # URLs to internal services (adjust ports/paths for your stack)
+      AUTH_SERVICE_URL: http://auth-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      MARKETPLACE_SERVICE_URL: http://marketplace-service:8080
+      EXAM_SERVICE_URL: http://exam-service:8080
+      NOTIFICATION_SERVICE_URL: http://notification-service:8080
+      IOT_SERVICE_URL: http://iot-service:8080
+      SHUTTLE_SERVICE_URL: http://shuttle-service:8080
+      # Shared JWT secret (must match Auth + other services)
+      JWT_SECRET: change-me-in-prod
+    depends_on:
+      - auth-service
+      - booking-service
+      - marketplace-service
+      - exam-service
+      - notification-service
+      - iot-service
+      - shuttle-service
+    networks:
+      - backend
+
+  auth-service:
+    build: ./services/auth-service
+    container_name: auth-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: auth_db
+      JWT_SECRET: change-me-in-prod
+    depends_on:
+      - postgres
+    networks:
+      - backend
+
+  booking-service:
+    build: ./services/booking-service
+    container_name: booking-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: booking_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - postgres
+      - rabbitmq
+      - redis
+    networks:
+      - backend
+
+  marketplace-service:
+    build: ./services/marketplace-service
+    container_name: marketplace-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: marketplace_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - postgres
+      - rabbitmq
+      - redis
+    networks:
+      - backend
+
+  exam-service:
+    build: ./services/exam-service
+    container_name: exam-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: exam_db
+      NOTIFICATION_SERVICE_URL: http://notification-service:8080
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    depends_on:
+      - postgres
+      - notification-service
+      - rabbitmq
+    networks:
+      - backend
+
+  notification-service:
+    build: ./services/notification-service
+    container_name: notification-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: notification_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - backend
+
+  iot-service:
+    build: ./services/iot-service
+    container_name: iot-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: iot_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - backend
+
+  shuttle-service:
+    build: ./services/shuttle-service
+    container_name: shuttle-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: shuttle_db
+    depends_on:
+      - postgres
+    networks:
+      - backend
+
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # For React/Vue etc – adjust as needed
+      VITE_API_BASE_URL: http://localhost:8080/api
+      REACT_APP_API_BASE_URL: http://localhost:8080/api
+    depends_on:
+      - gateway
+    networks:
+      - backend
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: core
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    networks:
+      - backend
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
