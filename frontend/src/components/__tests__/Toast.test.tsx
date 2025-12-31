@@ -37,7 +37,10 @@ describe('Toast Component', () => {
   });
 
   afterEach(() => {
-    jest.runOnlyPendingTimers();
+    // Clean up all timers properly to avoid act() warnings
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
     jest.useRealTimers();
   });
 

@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:authdb}
+    username: ${DB_USER:auth}
+    password: ${DB_PASSWORD:auth}
+  jpa:
+    hibernate:
+      # Use 'validate' in production - Flyway manages schema changes
+      ddl-auto: ${JPA_DDL_AUTO:validate}
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  # Flyway database migration configuration
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: true
+    baseline-version: '0'
+    locations: classpath:db/migration
+    validate-on-migrate: true
+  lifecycle:
+    # Maximum time to wait for in-flight requests during shutdown
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
+
+server:
+  port: ${SERVER_PORT:8081}
+  # Enable graceful shutdown - waits for active requests to complete
+  shutdown: graceful
+
+security:
+  jwt:
+    # ⚠️ SECURITY WARNING: The default secret is for LOCAL DEVELOPMENT ONLY!
+    # In PRODUCTION, you MUST set the JWT_SECRET environment variable to a strong,
+    # random 256-bit (32+ byte) base64-encoded secret. Example generation:
+    #   openssl rand -base64 32
+    # Failure to change this in production is a critical security vulnerability!
+    secret: ${JWT_SECRET:c21hcnQtdW5pdmVyc2l0eS1zZWNyZXQta2V5LWZvci1qd3QtdG9rZW4tMjU2Yml0cw==}
+    expiration-ms: ${JWT_EXPIRATION_MS:3600000}
+  # Account Lockout Configuration
+  # Protects against brute force attacks by locking accounts after too many failed attempts
+  account-lockout:
+    max-attempts: ${ACCOUNT_LOCKOUT_MAX_ATTEMPTS:5}
+    duration-minutes: ${ACCOUNT_LOCKOUT_DURATION_MINUTES:15}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

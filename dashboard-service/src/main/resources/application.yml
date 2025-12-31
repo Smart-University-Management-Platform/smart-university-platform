@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: dashboard-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:dashboarddb}
+    username: ${DB_USER:dashboard}
+    password: ${DB_PASSWORD:dashboard}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  lifecycle:
+    # Maximum time to wait for in-flight requests during shutdown
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
+
+server:
+  port: ${SERVER_PORT:8087}
+  # Enable graceful shutdown - waits for active requests to complete
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+dashboard:
+  sensors:
+    update-interval-ms: 5000
+  shuttle:
+    update-interval-ms: 7000

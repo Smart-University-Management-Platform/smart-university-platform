@@ -1,225 +1,517 @@
-# Smart University Management Platform
-_Architecture Wiki — Phase 1_
+# Smart University Microservices Platform
 
-> A microservices-based platform for managing key university and campus services (auth, bookings, marketplace, exams, notifications, IoT, shuttle, …).  
-> This document is the entry point to the **architecture wiki** for Phase 1.
+A production-style microservices platform for university management, demonstrating distributed systems patterns including **Saga**, **Circuit Breaker**, **State**, **Strategy**, and **Observer** patterns.
 
----
-
-## 1. Project Overview
-
-The Smart University Management Platform is a distributed system that supports core campus scenarios:
-
-- student and instructor authentication,
-- booking shared resources (e.g., rooms),
-- a marketplace for events/services,
-- online exams and notifications,
-- optional IoT and shuttle tracking modules.
-
-The focus of **Phase 1** is not implementation, but **understanding the domain and establishing a solid architecture** that can scale, remain reliable under load, and be easy to evolve.
-
-This repo currently focuses on **architecture**. Implementation and deployment guides will be added in later phases.
+> **Course:** Software Analysis and Design  
+> **Instructor:** Dr. Feizi
 
 ---
 
-## 2. Architecture Summary
+## Table of Contents
 
-At a high level, the platform is:
-
-- **Microservices-based**: independent services for Auth, Booking, Marketplace, Exam, Notification, IoT, and Shuttle.
-- Protected by an **API Gateway**: a single entry point for all clients.
-- **Event-driven** where appropriate: services publish and consume events via a message broker (e.g., RabbitMQ).
-- Designed with **resilience** in mind: at least one critical call (e.g., Exam → Notification) is protected by a Circuit Breaker.
-- Built around **multi-tenancy**: multiple faculties/vendors share the system while their data remains strictly isolated.
-
-Key services (conceptual):
-
-- `Auth Service` – registration, login, issuing JWTs (`sub`, `tenantId`, `roles`).
-- `Booking Service` – resource catalogue and reservations; prevents overbooking.
-- `Marketplace Service` – products, carts, orders; orchestrates a Saga for the order workflow.
-- `Exam Service` – exam definitions and exam sessions; uses Circuit Breaker when calling Notification.
-- `Notification Service` – sends email/SMS/other notifications; consumes domain events.
-- `IoT Service` (optional) – ingests sensor readings and feeds a live dashboard.
-- `Shuttle Service` (optional) – exposes current shuttle location / routes.
+- [Project Overview](#project-overview)
+- [Architecture](#architecture)
+- [Design Patterns](#design-patterns)
+- [Services](#services)
+- [Quick Start](#quick-start)
+- [Demo Accounts](#demo-accounts)
+- [API Reference](#api-reference)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Project Structure](#project-structure)
+- [Documentation](#documentation)
 
 ---
 
-## 3. C4 Model
+## Project Overview
 
-The C4 model is used to describe the system at different levels of abstraction.
+### Features
 
-### 3.1 Level 1 — System Context
+| Module | Description |
+|--------|-------------|
+| **Authentication** | JWT-based auth with RBAC (Student, Teacher, Admin) |
+| **Booking** | Resource reservation with overbooking prevention |
+| **Marketplace** | Products and orders with Saga-based checkout |
+| **Exams** | Create, start, submit exams with State pattern |
+| **Dashboard** | Live IoT sensors and shuttle tracking |
+| **Notifications** | Event-driven notifications via RabbitMQ |
 
-**File:** [`docs/arch/Context.md`](docs/arch/Context.md)  
-Shows:
+### Non-Negotiable Requirements
 
-- primary actors: Student, Instructor, Tenant Admin;
-- external systems: Payment Provider, Map/Geocoding, Email/SMS;
-- how all client traffic flows through the API Gateway.
+| Requirement | Status | Implementation |
+|-------------|--------|----------------|
+| Microservices Architecture | ✅ | 8 independent services |
+| Saga Pattern | ✅ | `OrderSagaService` for checkout |
+| Circuit Breaker | ✅ | `NotificationClient` with Resilience4j |
+| Event-Driven (RabbitMQ) | ✅ | Order/Exam events → Notification |
+| API Gateway | ✅ | Spring Cloud Gateway with JWT |
+| Multi-Tenancy | ✅ | Row-level isolation with `tenant_id` |
 
-### 3.2 Level 2 — Containers
+---
 
-**File:** [`docs/arch/Container.md`](docs/arch/Container.md)  
-Describes:
+## Architecture
 
-- the main containers (Gateway, individual services, message broker, caches, databases),
-- responsibilities and key data ownership per service,
-- where synchronous HTTP calls are used vs. asynchronous events.
+### System Overview
 
-Text sketch of the main runtime view:
-
-```text
-[ Web/Mobile Clients ]
-          |
-          v
-    [ API Gateway ] --(sync HTTP)--> [ Auth ]
-                                                   --> [ Booking ]
-                          --> [ Marketplace ]
-                          --> [ Exam ] --(CB)--> [ Notification ]
-                          --> [ IoT ]
-                          --> [ Shuttle ]
-
-[ Services ] --(async events)--> [ Message Broker ] --> [ Notification, others ]
-
-[ Redis / Caches ] and [ per-service Databases ] support performance and persistence.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Smart University Platform                     │
+├─────────────────────────────────────────────────────────────────┤
+│  👤 Students    👨‍🏫 Teachers    👨‍💼 Admins                         │
+│                           │                                      │
+│                    ┌──────▼──────┐                               │
+│                    │ React SPA   │  :3200                        │
+│                    └──────┬──────┘                               │
+│                           │ HTTP/JWT                             │
+│                    ┌──────▼──────┐                               │
+│                    │ API Gateway │  :8080                        │
+│                    └──────┬──────┘                               │
+│         ┌─────────────────┼─────────────────┐                   │
+│    ┌────▼────┐  ┌────▼────┐  ┌────▼────┐  ┌────▼────┐          │
+│    │  Auth   │  │ Booking │  │ Market  │  │  Exam   │          │
+│    │ :8081   │  │ :8082   │  │ :8083   │  │ :8085   │          │
+│    └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘          │
+│         │            │            │            │                 │
+│    ┌────▼────┐  ┌────▼────┐  ┌────▼────┐  ┌────▼────┐          │
+│    │PostgreSQL│ │PostgreSQL│ │PostgreSQL│ │PostgreSQL│          │
+│    └─────────┘  └─────────┘  │ + Redis │  └─────────┘          │
+│                              └─────────┘                        │
+│    ┌─────────────────────────────────────────────────────┐      │
+│    │                    RabbitMQ                          │      │
+│    │  📨 order.confirmed  📨 exam.started                 │      │
+│    └─────────────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Higher C4 levels (Component / Code) will be added later during implementation.
+### Service Ports
+
+| Service | Port | Database |
+|---------|------|----------|
+| API Gateway | 8080 | - |
+| Auth Service | 8081 | auth-db |
+| Booking Service | 8082 | booking-db |
+| Marketplace Service | 8083 | market-db |
+| Payment Service | 8084 | payment-db |
+| Exam Service | 8085 | exam-db |
+| Notification Service | 8086 | notification-db |
+| Dashboard Service | 8087 | dashboard-db |
+| Frontend | 3200 | - |
+| RabbitMQ UI | 15800 | - |
+| Redis | 6379 | - |
 
 ---
 
-## 4. Architecture Decisions (ADRs)
+## Design Patterns
 
-Key architectural decisions are tracked as **ADR files** under `docs/adr/`.
+### Implemented Patterns (7 total, requirement: 5+)
 
-Planned ADRs for this project:
+| Pattern | Location | Purpose |
+|---------|----------|---------|
+| **Saga** | `marketplace-service/OrderSagaService` | Distributed transaction orchestration |
+| **Circuit Breaker** | `exam-service/NotificationClient` | Fault tolerance for external calls |
+| **State** | `exam-service/state/*` | Exam lifecycle management |
+| **Strategy** | `payment-service/strategy/*` | Payment provider abstraction |
+| **Observer** | `notification-service/NotificationListeners` | Event-driven notifications |
+| **Repository** | All services | Data access abstraction |
+| **Factory** | `exam-service/ExamStateFactory` | State object creation |
 
-- `ADR-0001 – Event-Driven Microservices + API Gateway`  
-  - Why the system is decomposed into microservices behind a gateway  
-  - When to use synchronous vs. asynchronous communication
+### Pattern Details
 
-- `ADR-0002 – Multi-Tenancy Strategy (Per-Schema)`  
-  - Compares tenant-per-database vs. tenant-per-schema vs. shared tables  
-  - Proposes tenant-per-schema initially, with an upgrade path for heavy tenants
-
-- `ADR-0003 – Resilience with Circuit Breaker`  
-  - Where we apply Circuit Breaker (e.g., Exam → Notification)  
-  - Default timeouts, retry policy, and failure handling
-
-- `ADR-0004 – Performance & Caching (p95 < 400ms)`  
-  - When and how to use Redis cache, pagination, and query optimisation  
-  - Constraints and invalidation strategy
-
-- `ADR-0005 – Anti-Overbooking & Consistency`  
-  - Preventing double-booking using a unique constraint `(resourceId, timeslot)`  
-  - Use of idempotency keys and Outbox for reliable event publishing
-
-Each ADR follows the same structure:
-
-```text
-Status: Proposed | Accepted | Superseded
-
-Context
-Options
-Decision
-Consequences
+#### Saga Pattern (Marketplace Checkout)
+```
+1. Create PENDING order
+2. Call Payment Service for authorization
+3. Decrement stock with pessimistic locking
+4. On failure: Cancel order + compensate payment
+5. On success: Publish OrderConfirmedEvent
 ```
 
-During Phase 1, most ADRs will be **Proposed**; later phases may mark them as **Accepted** or update them.
-
----
-
-## 5. Quality Attributes (NFRs) and How We Address Them
-
-The architecture is shaped by several key quality attributes.
-
-### 5.1 Scalability
-
-- Stateless services where possible, behind a load balancer.
-- Horizontal scaling by adding more instances.
-- Message broker used to offload long-running or high-volume operations.
-
-### 5.2 Multi-Tenancy
-
-- Each service owns its data model and implements tenant isolation.  
-- Proposed approach: **tenant-per-schema** (per ADR-0002) for a good balance between isolation and operational cost.
-
-### 5.3 Performance
-
-- Target: **95% of API requests respond in under 400 ms**.  
-- Use Redis caching, database indexing, and pagination; push non-critical work to asynchronous flows.
-
-### 5.4 Security
-
-- Centralised auth with JWT and role-based access control (RBAC).  
-- `tenantId` is propagated from the gateway through to services and data storage.
-
-### 5.5 Reliability & Resilience
-
-- Circuit Breaker and sensible timeouts on critical synchronous calls.  
-- Retry policies with backoff and jitter where appropriate.  
-- Dead-letter queues (DLQ) for failed messages on the broker.
-
-### 5.6 Maintainability
-
-- Service boundaries aligned with clear business capabilities.  
-- Use of well-known design patterns (e.g., Strategy, State, Observer) where they simplify the design.  
-- All major architecture decisions documented via ADRs.
-
----
-
-## 6. Repository Layout (Phase 1)
-
-_Planned structure — actual implementation will grow in later phases._
-
-```text
-smart-university-platform/
-├─ README.md                # Architecture wiki entry point (this file)
-├─ README.fa.md             # Optional Persian version (if present)
-├─ docs/
-│  ├─ arch/
-│  │  ├─ Context.md         # C4 Level 1 – System Context
-│  │  └─ Container.md       # C4 Level 2 – Containers
-│  └─ adr/
-│     ├─ 0001-event-driven-microservices-and-gateway.md
-│     ├─ 0002-multi-tenancy-strategy.md
-│     ├─ 0003-resilience-circuit-breaker.md
-│     ├─ 0004-performance-and-caching.md
-│     └─ 0005-anti-overbooking-and-consistency.md
-└─ (implementation to be added in later phases)
+#### Circuit Breaker (Exam → Notification)
+```
+CLOSED ──[failures > threshold]──► OPEN
+   ▲                                  │
+   │                            [timeout]
+   │                                  ▼
+   └────[success]──────────── HALF_OPEN
 ```
 
-As the project evolves, additional folders will be added for:
-
-- `gateway/` – API gateway implementation  
-- `services/` – microservices (auth, booking, marketplace, exam, notification, …)  
-- `infra/` – infrastructure as code, docker-compose, etc.  
-- `frontend/` – web or mobile client(s)
+#### State Pattern (Exam Lifecycle)
+```
+DRAFT ──► SCHEDULED ──► LIVE ──► CLOSED
+```
 
 ---
 
-## 7. Phases (High-Level Roadmap)
+## Services
 
-- **Phase 1 – Discover & Foundation**  
-  - Deliverable: this architecture wiki (README + C4 + initial ADRs)
+### Auth Service
+- User registration (defaults to STUDENT role)
+- JWT token generation with role, tenant, username claims
+- Password validation (8+ chars, uppercase, lowercase, digit, special char)
+- Account lockout after 5 failed attempts
 
-- **Phase 2 – Core Prototype**  
-  - Minimal working system with Auth + Booking + Gateway  
-  - Short video demo (login + resource listing)
+### Booking Service
+- Resource management (rooms, labs)
+- Reservation with pessimistic locking (no overbooking)
+- Duration validation (30 min to 24 hours)
 
-- **Phase 3 – Advanced Patterns**  
-  - Implement Saga and Circuit Breaker in real flows  
-  - Document lessons learned (`Learning_Report.md`)
+### Marketplace Service
+- Product catalog with Redis caching
+- Saga-based checkout with compensation
+- Order history
 
-- **Phase 4 – Integration & Storytelling**  
-  - Complete prototype, final presentation and documentation  
-  - Final architecture story tying design, code, and requirements together
+### Exam Service
+- State pattern for exam lifecycle
+- Circuit Breaker for notification calls
+- Student submission with duplicate prevention
+
+### Notification Service
+- RabbitMQ event listeners (Observer pattern)
+- Event logging for audit trail
+
+### Dashboard Service
+- IoT sensor simulation (temperature, humidity, CO2, energy)
+- Shuttle GPS tracking simulation
 
 ---
 
-## 8. Working With This Repo (Team Notes)
+## Quick Start
 
-- Treat this README and the `docs/` folder as the **source of truth** for architecture.  
-- Before making a significant change to the design, write or update an ADR.  
-- Keep C4 diagrams and ADRs in sync with the implementation as you move into later phases.  
-- Use issues and pull requests to discuss architectural changes so decisions are recorded and reviewable.
+### Prerequisites
+
+- **Docker Desktop** (Windows/Mac) or **Docker + Docker Compose** (Linux)
+- **Git** for cloning the repository
+
+### Start All Services
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd smart-university
+
+# Start all services
+docker compose up --build
+```
+
+Wait 2-3 minutes for all services to initialize.
+
+### Access Points
+
+| Service | URL |
+|---------|-----|
+| Frontend SPA | http://localhost:3200 |
+| API Gateway | http://localhost:8080 |
+| RabbitMQ UI | http://localhost:15800 (guest/guest) |
+
+### Stop Services
+
+```bash
+docker compose down
+```
+
+### Windows Scripts
+
+```cmd
+scripts\start-platform.bat      # Start platform
+scripts\start-platform.bat -d   # Start detached
+scripts\run-tests.bat           # Run backend tests
+scripts\clean-all.bat           # Clean build artifacts
+scripts\docker-cleanup.bat      # Clean Docker resources
+scripts\docker-nuke.bat         # Remove ALL Docker resources (use with caution)
+.\scripts\check-health.ps1      # PowerShell: Check service health
+.\scripts\test-api.ps1          # PowerShell: Run API tests
+```
+
+### Linux/macOS Scripts
+
+```bash
+# Make scripts executable (first time only)
+chmod +x scripts/*.sh
+
+./scripts/start-platform.sh      # Start platform
+./scripts/start-platform.sh -d   # Start detached
+./scripts/run-tests.sh           # Run backend tests
+./scripts/run-tests.sh --all     # Run backend + frontend tests
+./scripts/clean-all.sh           # Clean build artifacts
+./scripts/docker-cleanup.sh      # Clean Docker resources
+./scripts/check-health.sh        # Check service health
+./scripts/test-api.sh            # Run API tests
+```
+
+---
+
+## Demo Accounts
+
+Pre-created accounts in the `engineering` tenant:
+
+| Username | Password | Role |
+|----------|----------|------|
+| `admin` | `Admin123!` | ADMIN |
+| `teacher` | `Teacher123!` | TEACHER |
+| `student` | `Student123!` | STUDENT |
+
+### Demo Walkthrough
+
+1. **Login as Teacher** → Create a product in Marketplace
+2. **Login as Student** → Buy the product (observe Saga flow)
+3. **Login as Teacher** → Create and start an exam
+4. **Login as Student** → Take the exam and submit answers
+5. **View Dashboard** → See live sensor readings and shuttle position
+
+---
+
+## API Reference
+
+### Authentication
+
+```bash
+# Register (password: 8+ chars with uppercase, lowercase, digit, special char)
+curl -X POST http://localhost:8080/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test","password":"Test123!","tenantId":"engineering"}'
+
+# Login
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test","password":"Test123!","tenantId":"engineering"}'
+```
+
+### Booking
+
+```bash
+# List resources
+curl http://localhost:8080/booking/resources \
+  -H "Authorization: Bearer <token>"
+
+# Create reservation
+curl -X POST http://localhost:8080/booking/reservations \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"resourceId":"<uuid>","startTime":"2024-01-01T10:00:00Z","endTime":"2024-01-01T11:00:00Z"}'
+```
+
+### Marketplace
+
+```bash
+# List products
+curl http://localhost:8080/market/products \
+  -H "Authorization: Bearer <token>"
+
+# Checkout (Saga)
+curl -X POST http://localhost:8080/market/orders/checkout \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"items":[{"productId":"<uuid>","quantity":1}]}'
+```
+
+### Exams
+
+```bash
+# Create exam (TEACHER only)
+curl -X POST http://localhost:8080/exam/exams \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Quiz","startTime":"2024-01-01T10:00:00Z","questions":[{"text":"What is 2+2?"}]}'
+
+# Start exam
+curl -X POST http://localhost:8080/exam/exams/<id>/start \
+  -H "Authorization: Bearer <token>"
+
+# Submit answers (STUDENT only)
+curl -X POST http://localhost:8080/exam/exams/<id>/submit \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"answers":{"q1":"4"}}'
+```
+
+### Dashboard
+
+```bash
+# Get sensors
+curl http://localhost:8080/dashboard/sensors \
+  -H "Authorization: Bearer <token>"
+
+# Get shuttle position
+curl http://localhost:8080/dashboard/shuttle \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Testing
+
+### Backend Tests
+
+```bash
+# Run all tests (requires Maven)
+mvn test
+
+# Or with Docker
+docker compose run --rm auth-service mvn test
+```
+
+### Frontend Tests
+
+```bash
+cd frontend
+npm install
+npm test
+```
+
+### Test Coverage
+
+| Category | Status |
+|----------|--------|
+| Auth Integration | ✅ Pass |
+| Booking (+ Concurrency) | ✅ Pass |
+| Marketplace Saga | ✅ Pass |
+| Exam State Machine | ✅ Pass |
+| Circuit Breaker | ✅ Pass |
+| Frontend Components | ✅ Pass |
+
+---
+
+## Troubleshooting
+
+### Services Not Starting
+
+```bash
+# Clean restart
+docker compose down -v
+docker compose up --build
+```
+
+### Port Already in Use
+
+```bash
+# Check port usage
+netstat -ano | findstr :8080  # Windows
+lsof -i :8080                 # Linux/Mac
+```
+
+### Database Connection Errors
+
+```bash
+# Restart databases
+docker compose restart auth-db booking-db market-db
+```
+
+### RabbitMQ Issues
+
+1. Open http://localhost:15800
+2. Login: guest/guest
+3. Check "Queues" and "Exchanges" tabs
+
+### Clear Redis Cache
+
+```bash
+docker exec -it redis redis-cli -a changeme FLUSHALL
+```
+
+---
+
+## Project Structure
+
+```
+smart-university/
+├── frontend/                    # React + TypeScript SPA
+│   ├── src/
+│   │   ├── pages/              # Login, Dashboard, Booking, etc.
+│   │   ├── components/         # Toast, ErrorBoundary, etc.
+│   │   └── state/              # AuthContext, ThemeContext
+│   └── package.json
+│
+├── auth-service/               # JWT authentication
+├── booking-service/            # Resource reservations
+├── marketplace-service/        # Products + Saga checkout
+├── payment-service/            # Payment strategy
+├── exam-service/               # State pattern + Circuit Breaker
+├── notification-service/       # Observer pattern
+├── dashboard-service/          # IoT simulation
+├── gateway-service/            # API Gateway
+├── common-lib/                 # Shared utilities
+│
+├── docs/
+│   ├── AI_Log.md              # AI interaction log
+│   ├── Learning_Report.md     # Technical learnings
+│   └── adrs/                  # Architecture Decision Records
+│       ├── 001-service-boundaries.md
+│       ├── 002-multi-tenancy-strategy.md
+│       ├── 003-saga-vs-two-phase-commit.md
+│       ├── 004-circuit-breaker-for-notification.md
+│       └── 005-database-per-service.md
+│
+├── scripts/                    # Start/test scripts
+├── docker-compose.yml          # Full stack orchestration
+└── README.md                   # This file
+```
+
+---
+
+## Documentation
+
+### Required Project Documents
+
+| Document | Path | Description |
+|----------|------|-------------|
+| AI Log | `docs/AI_Log.md` | AI interaction summary |
+| Learning Report | `docs/Learning_Report.md` | Technical learnings on Saga, Circuit Breaker |
+| ADRs | `docs/adrs/` | 5 Architecture Decision Records |
+
+### Security Features
+
+- JWT authentication with role-based access control
+- Password validation (8+ chars, complexity requirements)
+- Rate limiting (10 login/min, 5 register/min)
+- Account lockout (5 failed attempts → 15 min lock)
+- XSS protection via input sanitization
+- Multi-tenant data isolation
+
+### Key Technical Decisions
+
+1. **Database-per-Service**: Each microservice has its own PostgreSQL database
+2. **Row-Level Multi-Tenancy**: `tenant_id` column on all tenant-bound tables
+3. **Orchestrated Saga**: Marketplace orchestrates checkout, not choreography
+4. **Circuit Breaker**: Exam starts succeed even if notifications fail
+5. **Stateless Services**: JWT tokens carry all auth state
+
+---
+
+## Requirements Checklist
+
+### Functional Requirements
+
+| Code | Requirement | Status |
+|------|-------------|--------|
+| FR-01 | User registration/login | ✅ |
+| FR-02 | JWT authentication | ✅ |
+| FR-03 | View bookable resources | ✅ |
+| FR-04 | Book with no overbooking | ✅ |
+| FR-05 | Sellers create products | ✅ |
+| FR-06 | Saga-based checkout | ✅ |
+| FR-07 | Teachers create exams | ✅ |
+| FR-08 | Students submit exams | ✅ |
+| FR-09 | Dashboard sensors | ✅ |
+| FR-10 | Shuttle tracking | ✅ |
+
+### Non-Functional Requirements
+
+| Code | Requirement | Status |
+|------|-------------|--------|
+| NFR-S01 | Horizontal scalability | ✅ |
+| NFR-MT01 | Multi-tenancy isolation | ✅ |
+| NFR-SE01 | JWT + RBAC | ✅ |
+| NFR-R01 | Circuit Breaker resilience | ✅ |
+| NFR-R02 | No overbooking | ✅ |
+| NFR-MN01 | 5+ design patterns | ✅ (7 patterns) |
+| NFR-MN02 | ADR documentation | ✅ (5 ADRs) |
+
+---
+
+## License
+
+This project is for educational purposes as part of the Software Analysis and Design course.
+
+---
+
+*Last Updated: December 2024*

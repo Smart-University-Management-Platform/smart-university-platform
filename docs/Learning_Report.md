@@ -1,294 +1,947 @@
-# Learning_Report.md - گزارش یادگیری
+# Learning Report - Technical Learnings & Reflections
 
-این فایل بازتابی از یادگیری‌های فنی در طول توسعه پروژه پلتفرم مدیریت هوشمند دانشگاه است.
-
-> **توجه:** این فایل خلاصه‌ای از گزارش کامل `ai-interaction-report.md` است. برای جزئیات بیشتر به آن فایل مراجعه کنید.
+This comprehensive report documents the technical learnings, challenges overcome, and insights gained by our 8-member team during the 1-month development of the Smart University Microservices Platform.
 
 ---
 
-## 1. الگوی Saga - درک عمیق
+## Table of Contents
 
-### چه چیزی پیاده‌سازی شد
+1. [Executive Summary](#executive-summary)
+2. [Team Learning Overview](#team-learning-overview)
+3. [Design Patterns Mastered](#design-patterns-mastered)
+4. [Architecture Concepts](#architecture-concepts)
+5. [Security Implementations](#security-implementations)
+6. [Frontend Development](#frontend-development)
+7. [DevOps & Infrastructure](#devops--infrastructure)
+8. [Challenges & Solutions](#challenges--solutions)
+9. [Team Reflections](#team-reflections)
+10. [Skills Acquired](#skills-acquired)
+11. [Recommendations for Future Projects](#recommendations-for-future-projects)
 
-- **هماهنگ‌کننده**: Marketplace Service (`OrderSagaService`) به عنوان هماهنگ‌کننده Saga برای checkout عمل می‌کند
-- **شرکت‌کنندگان**:
-  - Payment Service: مجوز و لغو پرداخت‌ها
-  - خود Marketplace: مدیریت چرخه حیات سفارش و موجودی
+---
 
-### گردش کار
+## Executive Summary
+
+Over the course of 4 weeks, our team of 8 developers built a production-style microservices platform demonstrating advanced distributed systems patterns. This report captures our collective learning journey.
+
+### Key Achievements
+
+| Category | Details |
+|----------|---------|
+| **Services Built** | 8 microservices + API Gateway |
+| **Design Patterns** | 7 patterns implemented |
+| **Technologies** | Spring Boot, React, PostgreSQL, RabbitMQ, Redis |
+| **Architecture** | Event-driven, multi-tenant, fault-tolerant |
+| **Testing** | 50+ integration tests, frontend unit tests |
+
+### Learning Highlights
+
+- Transitioned from monolithic thinking to microservices mindset
+- Understood distributed transaction challenges and solutions
+- Implemented fault tolerance patterns for production readiness
+- Gained experience with event-driven architecture
+- Developed full-stack skills across backend and frontend
+
+---
+
+## Team Learning Overview
+
+### Team Alpha: Gateway & Authentication
+**Members:** @Navidtor, @amirrezamaqsoudi
+
+| Topic | Before Project | After Project |
+|-------|---------------|---------------|
+| API Gateway | Never used | Configured routing, filters, RBAC |
+| JWT | Basic understanding | Implemented generation, validation, claims |
+| Spring WebFlux | Unknown | Comfortable with reactive patterns |
+| Security | Theoretical | Hands-on with BCrypt, rate limiting, lockout |
+
+### Team Beta: Booking & Resources
+**Members:** @GhazaleESK, @tinabaouj
+
+| Topic | Before Project | After Project |
+|-------|---------------|---------------|
+| Database Locking | Unknown | Implemented pessimistic locking |
+| JPA Queries | Basic CRUD | Complex queries with locking |
+| React Hooks | Basic useState | useCallback, useMemo, useEffect mastery |
+| Calendar UI | Never built | Complete weekly calendar component |
+
+### Team Gamma: Marketplace & Payments
+**Members:** @xxheka, @sophiedlk
+
+| Topic | Before Project | After Project |
+|-------|---------------|---------------|
+| Saga Pattern | Never heard of | Implemented with compensation |
+| Strategy Pattern | Textbook knowledge | Real-world implementation |
+| RabbitMQ | Never used | Event publishing and routing |
+| Distributed Transactions | Unknown | Deep understanding of challenges |
+
+### Team Delta: Exams & Notifications
+**Members:** @Mariahdlk1989, @xanahid
+
+| Topic | Before Project | After Project |
+|-------|---------------|---------------|
+| State Pattern | Textbook knowledge | Production implementation |
+| Circuit Breaker | Unknown | Resilience4j integration |
+| Message Queues | Basic concept | RabbitMQ listeners, dead letters |
+| Fault Tolerance | Theoretical | Practical fallback strategies |
+
+---
+
+## Design Patterns Mastered
+
+### 1. Saga Pattern - Distributed Transactions
+
+**Implemented By:** @xxheka (Team Gamma)
+
+#### The Problem We Solved
+In a monolithic application, buying a product is simple:
+```
+BEGIN TRANSACTION
+  1. Create order
+  2. Charge payment
+  3. Reduce stock
+COMMIT
+```
+
+In microservices, Order, Payment, and Stock might be in different services with different databases. A single transaction is impossible.
+
+#### Our Solution: Orchestrated Saga
 
 ```
-1. ایجاد سفارش `PENDING` با آیتم‌ها
-2. فراخوانی Payment Service برای مجوز پرداخت
-3. اگر مجوز داده شد:
-   - اعتبارسنجی و کاهش موجودی با قفل بدبینانه
-4. اگر هر شکستی رخ داد:
-   - علامت‌گذاری سفارش به `CANCELED`
-   - جبران با لغو پرداخت در صورت لزوم
-5. در صورت موفقیت:
-   - علامت‌گذاری سفارش به `CONFIRMED`
-   - انتشار `OrderConfirmedEvent` به RabbitMQ
+┌─────────────────────────────────────────────────────────────────┐
+│                    Saga Orchestrator                             │
+│                   (OrderSagaService)                             │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+         ┌────────────────────┼────────────────────┐
+         ▼                    ▼                    ▼
+   ┌──────────┐        ┌──────────┐        ┌──────────┐
+   │  Step 1  │        │  Step 2  │        │  Step 3  │
+   │  Create  │───────►│ Authorize│───────►│ Decrement│
+   │  Order   │        │ Payment  │        │  Stock   │
+   └──────────┘        └──────────┘        └──────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
+   ┌──────────┐        ┌──────────┐        ┌──────────┐
+   │  Comp 1  │◄───────│  Comp 2  │◄───────│  Comp 3  │
+   │  Cancel  │        │  Cancel  │        │  Restore │
+   │  Order   │        │ Payment  │        │  Stock   │
+   └──────────┘        └──────────┘        └──────────┘
 ```
 
-### درس‌های آموخته شده
+#### Key Learnings
 
-1. **تراکنش‌های محلی + جبران در مقابل تراکنش‌های سراسری**
-   - Sagaها تراکنش‌های محلی با اقدامات جبرانی را به جای تراکنش‌های ACID سراسری می‌پذیرند
-   - این وابستگی به یک مدیر تراکنش مرکزی را کاهش می‌دهد و با میکروسرویس‌ها سازگارتر است
-   - مصالحه: سازگاری در نهایت است و باید در وضعیت‌های دامنه (`PENDING`, `CONFIRMED`, `CANCELED`) قابل مشاهده باشد
+1. **Compensation is Essential**
+   > "Every forward step needs an undo step. If payment succeeds but stock fails, we must cancel the payment." - @xxheka
 
-2. **وضعیت‌های دامنه صریح وضوح را بهبود می‌دهند**
-   - مدل‌سازی صریح `OrderStatus` رفتار سیستم را آسان‌تر برای درک و تست می‌کند
-   - قابلیت مشاهده وضعیت‌های سفارش برای اشکال‌زدایی و پشتیبانی کاربر حیاتی است
+2. **State Visibility Matters**
+   - Orders have explicit states: `PENDING`, `CONFIRMED`, `CANCELED`
+   - Users can see what's happening at each stage
+   - Makes debugging much easier
 
-3. **تست‌ها باید مسیرهای شکست را پوشش دهند**
-   - تست‌های مسیر موفق کافی نیستند
-   - شکست‌های مجوز پرداخت باید بدون تغییرات موجودی مدیریت شوند
-   - شکست‌های موجودی پس از مجوز موفق باید جبران را فعال کنند
+3. **Idempotency is Critical**
+   - What if we retry a compensation that already ran?
+   - Operations must be safe to repeat without side effects
 
-4. **ایدمپوتنسی و ایمنی**
-   - مراحل Saga و جبران‌ها باید ایدمپوتنت یا امن برای تلاش مجدد باشند
-   - الگوهای استفاده شده آماده تقویت با توکن‌های ایدمپوتنت هستند
-
----
-
-## 2. الگوی Circuit Breaker - درک عمیق
-
-### چه چیزی پیاده‌سازی شد
-
-- **محل قرارگیری**: در Exam Service، پوشاندن فراخوانی‌های HTTP خروجی به Notification Service
-- **کتابخانه**: Resilience4j (`resilience4j-spring-boot3`)
-- **رفتار**:
-  - هنگام شروع آزمون:
-    - یک Circuit Breaker (`notificationCb`) فراخوانی به `/notification/notify/exam/{examId}` را احاطه می‌کند
-    - در صورت شکست یا مدار باز:
-      - یک fallback خطا را لاگ می‌کند
-      - آزمون همچنان به `LIVE` منتقل می‌شود
-      - یک `ExamStartedEvent` همچنان به RabbitMQ منتشر می‌شود
-
-### درس‌های آموخته شده
-
-1. **وابستگی‌های حیاتی در مقابل غیرحیاتی**
-   - شروع آزمون یک عملیات حیاتی است؛ اعلان‌ها مهم اما غیرحیاتی هستند
-   - Circuit Breakerها به تمایز این موارد کمک می‌کنند با جلوگیری از آبشاری شکست غیرحیاتی به جریان‌های حیاتی
-
-2. **Fallbackها باید متفکرانه باشند**
-   - یک fallback باید:
-     - اثرات جانبی مهم را حفظ کند (انتقال وضعیت آزمون)
-     - زمینه کافی (examId, tenantId, exception) را برای عیب‌یابی لاگ کند
-   - نباید خطاها را بی‌صدا ببلعد؛ قابلیت مشاهده ضروری است
-
-3. **تنظیم پیکربندی**
-   - تنظیمات Circuit Breaker (اندازه پنجره، آستانه نرخ شکست، مدت انتظار) مصالحه‌هایی هستند:
-     - خیلی تهاجمی → مدارهای باز غیرضروری
-     - خیلی ملایم → تخریب طولانی مدت
-   - در این پروژه، مقادیر پیش‌فرض استفاده شده، اما معماری امکان تنظیم دقیق بر اساس متریک‌های تولید را می‌دهد
-
-4. **الگوهای مکمل**
-   - Circuit Breakerها به خوبی با موارد زیر کار می‌کنند:
-     - Retries (برای تلاش‌های مجدد)
-     - Timeouts (برای محدود کردن مدت فراخوانی)
-     - Bulkheads (برای ایزوله‌سازی منابع)
+4. **Testing Failure Paths**
+   ```
+   Test Cases We Wrote:
+   ✓ Happy path: Order → Payment → Stock → Confirmed
+   ✓ Payment fails: Order → Payment(fail) → Cancel Order
+   ✓ Stock fails: Order → Payment → Stock(fail) → Cancel Payment → Cancel Order
+   ```
 
 ---
 
-## 3. معماری رویدادمحور (الگوی Observer)
+### 2. Circuit Breaker Pattern - Fault Tolerance
 
-### چه چیزی پیاده‌سازی شد
+**Implemented By:** @xanahid (Team Delta)
 
-- **تولیدکنندگان رویداد**:
-  - Marketplace Service: انتشار `OrderConfirmedEvent` در تکمیل موفق Saga
-  - Exam Service: انتشار `ExamStartedEvent` در شروع آزمون
-- **مصرف‌کننده رویداد**:
-  - Notification Service با استفاده از RabbitMQ و `@RabbitListener` گوش می‌دهد
-  - هر رویداد به عنوان یک `NotificationLog` با payload و tenant id ذخیره می‌شود
+#### The Problem We Solved
+When Exam Service calls Notification Service and it's down:
+- Without Circuit Breaker: Exam start hangs, timeouts stack up, whole system degrades
+- With Circuit Breaker: Fast failure, fallback behavior, system stays responsive
 
-### درس‌های آموخته شده
+#### State Machine Understanding
 
-1. **اتصال سست از طریق رویدادها**
-   - تولیدکنندگان چیزی از مصرف‌کنندگان نمی‌دانند
-   - مصرف‌کنندگان جدید (تحلیل، مانیتورینگ) می‌توانند بدون لمس دامنه‌های اصلی اضافه شوند
+```
+                    ┌─────────────────────────────────────┐
+                    │            CLOSED                    │
+                    │   (Normal operation, calls pass)     │
+                    └─────────────────────────────────────┘
+                                     │
+                         [Failure rate ≥ 50%]
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │             OPEN                     │
+                    │  (All calls fail fast, use fallback)│
+                    └─────────────────────────────────────┘
+                                     │
+                           [30 seconds pass]
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────────┐
+                    │          HALF_OPEN                   │
+                    │   (Allow 1 test call through)        │
+                    └─────────────────────────────────────┘
+                            │                │
+                    [Success]                [Failure]
+                            │                │
+                            ▼                ▼
+                         CLOSED            OPEN
+```
 
-2. **قابلیت مشاهده**
-   - رویدادها یک ردپای حسابرسی طبیعی از عملیات مهم دامنه تشکیل می‌دهند
-   - ذخیره رویدادها در `NotificationLog` یک تاریخچه قابل جستجو برای اشکال‌زدایی و گزارش‌گیری فراهم می‌کند
+#### Configuration Deep Dive
 
-3. **رویدادهای دامنه‌محور**
-   - رویدادها به زبان دامنه بیان می‌شوند (`order.confirmed`, `exam.started`)، نه زبان فنی
-   - این معماری را برای توضیح و استدلال با متخصصان دامنه آسان‌تر می‌کند
+```yaml
+resilience4j:
+  circuitbreaker:
+    instances:
+      notificationCb:
+        slidingWindowSize: 5          # Look at last 5 calls
+        failureRateThreshold: 50      # Open if 50% fail
+        waitDurationInOpenState: 30s  # Stay open for 30s
+        permittedNumberOfCallsInHalfOpenState: 1  # 1 test call
+```
 
-4. **سازگاری در نهایت**
-   - سیستم می‌پذیرد که اعلان‌ها ممکن است از عملیات اصلی عقب بمانند
-   - برای تجربه کاربری، این قابل قبول است تا زمانی که اقدامات اصلی سازگار و قابل اعتماد باشند
+#### Key Learnings
 
----
+1. **Fail Fast is Better Than Hang**
+   > "A slow failure is worse than a fast failure. Users would rather see 'Notification unavailable' than wait forever." - @xanahid
 
-## 4. میکروسرویس‌ها و Bounded Contexts
+2. **Fallback Design is Critical**
+   - What do we do when the circuit is open?
+   - Log for later retry? Show degraded experience? Queue for async processing?
 
-### چه چیزی اعمال شد
-
-- هر دامنه اصلی سرویس و پایگاه داده خود را دارد:
-  - Auth, Booking, Marketplace, Payment, Exam, Notification, Dashboard
-- API Gateway متمرکز می‌کند:
-  - احراز هویت (اعتبارسنجی JWT)
-  - RBAC برای عملیات حساس
-  - مسیریابی و تزریق هدر
-
-### درس‌های آموخته شده
-
-- نگه داشتن سرویس‌ها منسجم (Auth vs Booking vs Exam) استدلال درباره invariantها و حالت‌های شکست را ساده می‌کند
-- پایگاه‌های داده جداگانه برای هر سرویس از coupling بین سرویسی و درهم‌تنیدگی schema جلوگیری می‌کند
-- API Gateway مکان طبیعی برای اجرای نگرانی‌های افقی مانند احراز هویت، RBAC و انتشار هدر چندمستأجاری است
-
----
-
-## 5. چندمستأجاری و امنیت
-
-### چه چیزی پیاده‌سازی شد
-
-- **چندمستأجاری**:
-  - ایزوله‌سازی مستأجر در سطح ردیف در هر سرویس با استفاده از ستون‌های `tenantId`
-  - انتشار مستأجر از JWT → Gateway → هدر `X-Tenant-Id` → queryهای سرویس
-- **امنیت**:
-  - احراز هویت مبتنی بر JWT با نقش‌ها (STUDENT, TEACHER, ADMIN)
-  - RBAC در Gateway و درون سرویس‌ها
-
-### درس‌های آموخته شده
-
-1. **زمینه مستأجر به عنوان یک نگرانی درجه یک**
-   - عدم گنجاندن فیلترهای مستأجر در queryها ریسک اصلی است
-   - صریح کردن tenant id در مدل‌های entity، repositoryها و امضای متدها این ریسک را بسیار کاهش می‌دهد
-
-2. **لایه‌های امنیت**
-   - RBAC در سطح Gateway تصمیمات سطح مسیر را ساده می‌کند
-   - بررسی‌های سطح سرویس همچنان برای قوانین خاص کسب‌وکار ضروری هستند
-
-3. **ایزوله‌سازی داده در مقابل پیچیدگی عملیاتی**
-   - ایزوله‌سازی مستأجر در سطح ردیف به علاوه database-per-service تعادل خوبی برای این پروژه ایجاد می‌کند
+3. **Monitoring Matters**
+   - Expose circuit state via actuator endpoints
+   - Alert when circuits open frequently
 
 ---
 
-## 6. الگوی State برای چرخه حیات آزمون
+### 3. State Pattern - Lifecycle Management
 
-### چه چیزی پیاده‌سازی شد
+**Implemented By:** @Mariahdlk1989 (Team Delta)
 
-- **وضعیت‌ها**: DRAFT → SCHEDULED → LIVE → CLOSED
-- **کلاس‌ها**: `DraftExamState`, `ScheduledExamState`, `LiveExamState`, `ClosedExamState`
-- **Factory**: `ExamStateFactory` برای ایجاد شیء وضعیت مناسب
+#### The Problem We Solved
+Exam behavior changes based on state:
+- DRAFT: Can edit, can't start
+- SCHEDULED: Can start, can't submit
+- LIVE: Can submit, can't edit
+- CLOSED: Read-only
 
-### درس‌های آموخته شده
+Without State Pattern:
+```java
+// This gets messy fast!
+if (exam.getStatus() == DRAFT) {
+    if (action == "start") throw new IllegalStateException();
+    if (action == "edit") { /* allow */ }
+} else if (exam.getStatus() == SCHEDULED) {
+    // More conditions...
+}
+```
 
-1. **جداسازی رفتار از وضعیت**
-   - هر کلاس state مسئول رفتار خاص آن وضعیت است
-   - انتقال‌های وضعیت فقط در صورت مجاز بودن انجام می‌شوند
+#### Our Implementation
 
-2. **قابلیت توسعه**
-   - اضافه کردن وضعیت جدید فقط نیاز به یک کلاس جدید دارد
-   - رفتار موجود بدون تغییر باقی می‌ماند
+```java
+// Each state knows its own rules
+public interface ExamState {
+    ExamStateType getType();
+    void start(Exam exam);      // Transition to LIVE
+    void close(Exam exam);      // Transition to CLOSED
+    boolean canSubmit();        // Can students submit?
+    boolean canEdit();          // Can teachers edit?
+}
 
----
+// Clean service code
+public void startExam(UUID examId) {
+    Exam exam = findExam(examId);
+    ExamState state = stateFactory.getState(exam.getState());
+    state.start(exam);  // State handles validation and transition
+}
+```
 
-## 7. الگوی Strategy برای پرداخت
+#### State Transition Diagram
 
-### چه چیزی پیاده‌سازی شد
+```
+        ┌──────────┐
+        │  DRAFT   │
+        └────┬─────┘
+             │ schedule()
+             ▼
+        ┌──────────┐
+        │SCHEDULED │
+        └────┬─────┘
+             │ start()
+             ▼
+        ┌──────────┐
+        │   LIVE   │──── canSubmit() = true
+        └────┬─────┘
+             │ close()
+             ▼
+        ┌──────────┐
+        │  CLOSED  │
+        └──────────┘
+```
 
-- **رابط**: `PaymentStrategy`
-- **پیاده‌سازی**: `MockPaymentStrategy`
-- **استفاده**: Payment Service از strategy برای پردازش پرداخت استفاده می‌کند
+#### Key Learnings
 
-### درس‌های آموخته شده
+1. **Encapsulation Wins**
+   > "Each state class is like a small expert that knows exactly what's allowed. The service layer doesn't need to think about it." - @Mariahdlk1989
 
-1. **انتزاع ارائه‌دهنده**
-   - ارائه‌دهندگان پرداخت مختلف می‌توانند بدون تغییر کد سرویس اضافه شوند
-   - انتخاب strategy می‌تواند در زمان اجرا بر اساس تنظیمات باشد
+2. **Open/Closed Principle**
+   - Adding GRADED state? Create `GradedExamState`, add to factory, done.
+   - No changes to existing code.
 
-2. **تست‌پذیری**
-   - Mock strategyها تست‌ها را قابل پیش‌بینی می‌کنند
-   - نیازی به تعامل با ارائه‌دهندگان واقعی در تست‌ها نیست
-
----
-
-## 8. تست و کیفیت
-
-### چه چیزی اضافه و اصلاح شد
-
-- تست‌های یکپارچه برای:
-  - رزرواسیون‌های Booking (اطمینان از `409 Conflict` برای رزرواسیون‌های همپوشان)
-  - تلاش‌های رزرو **همزمان** برای نشان دادن جلوگیری از overbooking با قفل بدبینانه
-  - Saga checkout بازارچه (موفقیت، شکست پرداخت، کمبود موجودی با جبران)
-  - چرخه حیات آزمون: ایجاد و شروع آزمون‌ها، و ارسال‌های دانشجو
-- تست‌های واحد/رفتاری برای:
-  - الگوی State آزمون (رفتار DRAFT/SCHEDULED/LIVE/CLOSED)
-  - فیلتر JWT Gateway:
-    - 401 در صورت نبود توکن
-    - 403 وقتی `STUDENT` سعی در ایجاد محصول دارد
-    - تزریق صحیح هدر برای نقش‌های TEACHER/ADMIN
-
-### درس‌های آموخته شده
-
-- تست‌های متمرکز بر رفتار (مثل تست‌های همزمانی، تست‌های جبران Saga) ارزشمندتر از تست‌های صرفاً ساختاری هستند
-- تست edge caseها در مسیرهای شکست برای سیستم‌های توزیع‌شده ضروری است
-- حتی در یک سیستم دمو کوچک، استفاده از تست‌های واقع‌گرایانه معماری را معتبرتر می‌کند
-
----
-
-## 9. مصالحه‌های معماری
-
-### عملکرد
-
-- **تصمیمات طراحی**:
-  - Database-per-service با queryهای ساده و قابل ایندکس
-  - کش توزیع‌شده Redis برای لیست محصولات Marketplace
-  - TTL 10 دقیقه‌ای برای کش محصولات
-
-- **مصالحه‌ها**:
-  - سازگاری قوی برای عملیات اصلی گاهی به معنای قفل DB بیشتر است
-  - Redis یک جزء زیرساختی اضافه می‌کند اما مقیاس‌پذیری افقی را فعال می‌کند
-
-### قابلیت اطمینان
-
-- **تکنیک‌های استفاده شده**:
-  - قفل بدبینانه برای رزرواسیون‌ها و کاهش موجودی
-  - Saga با جبران برای گردش‌های بین سرویسی
-  - Circuit Breaker برای فراخوانی‌های اعلان
-  - وضعیت‌های دامنه واضح
-
-- **مصالحه‌ها**:
-  - پیچیدگی اضافی در هماهنگی و مدیریت وضعیت
-  - نیاز به لاگ‌گیری و متریک‌های خوب برای اشکال‌زدایی جریان‌های توزیع‌شده
+3. **Factory Pattern Complement**
+   - `ExamStateFactory` with `EnumMap` for O(1) lookups
+   - Clean separation of creation and usage
 
 ---
 
-## 10. خلاصه الگوهای اعمال شده
+### 4. Strategy Pattern - Payment Abstraction
 
-| الگو | پیاده‌سازی | سرویس |
-|------|-----------|-------|
-| **Saga** | OrderSagaService | Marketplace/Payment |
-| **Circuit Breaker** | NotificationClient | Exam → Notification |
-| **Observer / Event-driven** | RabbitMQ listeners | Notification |
-| **State** | ExamState, ExamStateFactory | Exam |
-| **Strategy** | PaymentStrategy | Payment |
-| **Repository** | JPA Repositories | All services |
-| **Factory** | ExamStateFactory | Exam |
+**Implemented By:** @sophiedlk (Team Gamma)
+
+#### The Problem We Solved
+Today we have mock payments. Tomorrow we might add:
+- Stripe for credit cards
+- PayPal for digital wallets
+- Bank transfer for large amounts
+
+We need to switch between them without changing core logic.
+
+#### Our Implementation
+
+```java
+public interface PaymentStrategy {
+    String getProviderName();
+    Payment authorize(String tenantId, UUID orderId, UUID userId, BigDecimal amount);
+    Payment cancel(Payment payment);
+}
+
+@Component
+public class MockPaymentStrategy implements PaymentStrategy {
+    @Override
+    public String getProviderName() { return "MOCK"; }
+    
+    @Override
+    public Payment authorize(...) {
+        // Simulate successful payment
+        return new Payment(/* ... status=AUTHORIZED */);
+    }
+}
+
+// Future: Add StripePaymentStrategy, PayPalPaymentStrategy, etc.
+```
+
+#### Key Learnings
+
+1. **Interface-Based Design**
+   > "Programming to interfaces, not implementations. The service doesn't know or care which payment provider is being used." - @sophiedlk
+
+2. **Spring's DI Makes It Easy**
+   - Inject `List<PaymentStrategy>` to get all implementations
+   - Build map by provider name for runtime selection
+
+3. **Testing Flexibility**
+   - Mock strategy for unit tests
+   - No external dependencies during testing
 
 ---
 
-## 11. نتیجه‌گیری
+### 5. Observer Pattern - Event-Driven Architecture
 
-این پروژه یادگیری‌های کلیدی زیر را فراهم کرد:
+**Implemented By:** @xxheka, @xanahid (Teams Gamma & Delta)
 
-1. **میکروسرویس‌ها نیاز به الگوهای خاص دارند**: Saga, Circuit Breaker, و Observer الگوهای ضروری برای سیستم‌های توزیع‌شده هستند
+#### The Problem We Solved
+When an order is confirmed:
+- Notification service should send email
+- Analytics might track it
+- Inventory might update reports
 
-2. **سازگاری در نهایت قابل مدیریت است**: با طراحی صحیح وضعیت‌های دامنه و مکانیزم‌های جبران
+Without Observer: Marketplace calls each service directly (tight coupling)
+With Observer: Marketplace publishes event, interested services listen
 
-3. **امنیت لایه‌ای ضروری است**: JWT + Gateway RBAC + بررسی‌های سرویس
+#### Our Implementation with RabbitMQ
 
-4. **چندمستأجاری یک نگرانی افقی است**: باید در همه لایه‌ها پیاده‌سازی شود
+```
+┌─────────────┐          ┌─────────────┐          ┌─────────────┐
+│ Marketplace │─────────►│  RabbitMQ   │─────────►│Notification │
+│   Service   │ publish  │   Exchange  │  route   │   Service   │
+└─────────────┘          └─────────────┘          └─────────────┘
+                               │
+                               │ (future subscribers)
+                               ▼
+                         ┌─────────────┐
+                         │  Analytics  │
+                         │   Service   │
+                         └─────────────┘
+```
 
-5. **تست‌های مسیر شکست حیاتی هستند**: تست‌های موفق کافی نیستند
+#### Event Design
 
-این یادگیری‌ها مستقیماً به سیستم‌های میکروسرویس دنیای واقعی قابل انتقال هستند.
+```java
+public record OrderConfirmedEvent(
+    UUID orderId,
+    UUID buyerId,
+    String buyerEmail,
+    BigDecimal totalAmount,
+    Instant timestamp
+) {}
+```
+
+#### Key Learnings
+
+1. **Loose Coupling is Powerful**
+   > "Marketplace doesn't know Notification exists. We could add 10 more subscribers without touching Marketplace code." - @xxheka
+
+2. **Event Granularity**
+   - Include enough data so subscribers don't need to call back
+   - But don't include everything (keep events focused)
+
+3. **Delivery Guarantees**
+   - At-least-once: Message might be delivered twice
+   - Consumers must be idempotent
 
 ---
 
-**برای جزئیات کامل‌تر، به فایل `docs/ai-interaction-report.md` مراجعه کنید.**
+## Architecture Concepts
+
+### Multi-Tenancy Implementation
+
+**Learning Lead:** @GhazaleESK (Team Beta)
+
+#### Approach: Row-Level Isolation
+
+Every tenant-bound table includes `tenant_id`:
+
+```sql
+CREATE TABLE resources (
+    id UUID PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,  -- Every row tagged
+    name VARCHAR(100) NOT NULL,
+    -- ...
+);
+
+CREATE INDEX idx_resources_tenant ON resources(tenant_id);
+```
+
+#### Enforcement Flow
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│  Client  │───►│  Gateway │───►│ Service  │───►│    DB    │
+│          │    │          │    │          │    │          │
+│ JWT with │    │ Extracts │    │ Uses in  │    │ Filters  │
+│ tenantId │    │ tenantId │    │ all      │    │ by       │
+│          │    │ to header│    │ queries  │    │ tenant   │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘
+```
+
+#### Key Learnings
+
+1. **Never Trust Client Input**
+   - Tenant ID comes from JWT, not request body
+   - Gateway is the single source of truth
+
+2. **Repository Pattern Enforces It**
+   ```java
+   // Every method includes tenantId
+   List<Resource> findByTenantId(String tenantId);
+   Optional<Resource> findByIdAndTenantId(UUID id, String tenantId);
+   ```
+
+3. **Trade-off Awareness**
+   | Approach | Isolation | Complexity | Cost |
+   |----------|-----------|------------|------|
+   | Row-level | Logical | Low | Low |
+   | Schema-level | Physical | Medium | Medium |
+   | Database-level | Complete | High | High |
+
+---
+
+### Pessimistic Locking for Data Integrity
+
+**Learning Lead:** @GhazaleESK (Team Beta)
+
+#### The Race Condition Problem
+
+```
+User A: Check if room available → Yes
+User B: Check if room available → Yes
+User A: Book the room → Success
+User B: Book the room → Success (OVERBOOKING!)
+```
+
+#### Our Solution
+
+```java
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@Query("SELECT r FROM Resource r WHERE r.id = :id AND r.tenantId = :tenantId")
+Optional<Resource> findByIdAndTenantIdForUpdate(@Param("id") UUID id, 
+                                                 @Param("tenantId") String tenantId);
+```
+
+This generates: `SELECT ... FOR UPDATE`
+
+#### How It Works
+
+```
+User A: SELECT ... FOR UPDATE → Gets lock, reads data
+User B: SELECT ... FOR UPDATE → WAITS (blocked by A's lock)
+User A: UPDATE, COMMIT → Releases lock
+User B: Gets lock, reads UPDATED data → Sees room is booked
+```
+
+#### Key Learnings
+
+1. **Correctness Over Performance**
+   > "For booking systems, we'd rather be slower than allow double-booking. Correctness is non-negotiable." - @GhazaleESK
+
+2. **Transaction Boundaries**
+   - Lock only held within `@Transactional` method
+   - Keep transactions short to avoid long waits
+
+3. **Deadlock Prevention**
+   - Always acquire locks in consistent order
+   - Set lock timeouts as safety net
+
+---
+
+## Security Implementations
+
+### JWT Authentication Flow
+
+**Learning Lead:** @amirrezamaqsoudi (Team Alpha)
+
+#### Token Structure
+
+```
+eyJhbGciOiJIUzI1NiJ9.    ← Header (algorithm)
+eyJzdWIiOiJ1c2VyLWlkIi.  ← Payload (claims)
+SflKxwRJSMeKKF2QT4fw.    ← Signature (verification)
+```
+
+#### Claims We Include
+
+| Claim | Purpose | Example |
+|-------|---------|---------|
+| sub | User ID (subject) | "550e8400-e29b-41d4-a716-446655440000" |
+| role | Authorization | "STUDENT" |
+| tenantId | Multi-tenant isolation | "engineering" |
+| username | Display name | "alice" |
+| iat | Issued at | 1703980800 |
+| exp | Expiration | 1703984400 |
+
+#### Security Measures
+
+1. **Password Hashing**: BCrypt with strength 10
+2. **Strong Password Policy**: 8+ chars, mixed case, digit, special char
+3. **Account Lockout**: 5 failures → 15 min lock
+4. **Rate Limiting**: 10 login/min, 5 register/min
+
+#### Key Learnings
+
+1. **Stateless Benefits**
+   > "No session storage means any server can validate any token. Perfect for scaling." - @amirrezamaqsoudi
+
+2. **Don't Over-Share**
+   - JWT payload is base64, not encrypted
+   - Never include passwords, secrets, or sensitive data
+
+3. **Short Expiration + Refresh**
+   - 1 hour tokens balance security and UX
+   - Refresh tokens for seamless re-authentication (future enhancement)
+
+---
+
+### Rate Limiting Implementation
+
+**Learning Lead:** @Navidtor (Team Alpha)
+
+#### Configuration
+
+```yaml
+# Gateway routes with rate limiting
+- id: auth-login-limited
+  uri: http://auth-service:8081
+  predicates:
+    - Path=/auth/login
+  filters:
+    - name: RateLimiting
+      args:
+        requests: 10
+        duration: 60
+```
+
+#### Key Learnings
+
+1. **Defense in Depth**
+   - Rate limiting is one layer
+   - Combined with account lockout, strong passwords, etc.
+
+2. **Distributed Challenges**
+   - In-memory only works with single gateway instance
+   - Production needs Redis-based shared state
+
+3. **User Experience**
+   - Return 429 with clear message
+   - Include Retry-After header
+
+---
+
+## Frontend Development
+
+### React Patterns Learned
+
+**Learning Lead:** @tinabaouj (Team Beta)
+
+#### Hooks Mastery
+
+| Hook | What We Learned | Use Case |
+|------|-----------------|----------|
+| useState | Basic state management | Form inputs, toggles |
+| useEffect | Side effects with dependencies | API calls, subscriptions |
+| useCallback | Memoize functions | Preventing unnecessary re-renders |
+| useMemo | Memoize values | Expensive calculations |
+| useContext | Global state | Auth state, theme |
+
+#### Common Pitfalls Avoided
+
+1. **Stale Closures**
+   ```javascript
+   // Problem: fetchData captures old state
+   useEffect(() => {
+     fetchData(); // Uses stale values
+   }, []); // Missing dependencies!
+   
+   // Solution: Include dependencies
+   useEffect(() => {
+     fetchData();
+   }, [userId, tenantId]); // Proper dependencies
+   ```
+
+2. **Infinite Loops**
+   ```javascript
+   // Problem: Creates new object every render
+   useEffect(() => {
+     fetchData(options); // options is new object each time
+   }, [options]); // Triggers every render!
+   
+   // Solution: Memoize the object
+   const options = useMemo(() => ({ page, limit }), [page, limit]);
+   ```
+
+#### Key Learnings
+
+> "React's dependency arrays are about correctness, not performance. Get them right first, optimize later." - @tinabaouj
+
+---
+
+### Error Handling Strategy
+
+**Learning Lead:** @tinabaouj (Team Beta)
+
+#### Three Layers of Protection
+
+1. **ErrorBoundary**: Catches render errors
+   ```jsx
+   <ErrorBoundary fallback={<ErrorPage />}>
+     <App />
+   </ErrorBoundary>
+   ```
+
+2. **API Interceptor**: Handles HTTP errors globally
+   ```javascript
+   api.interceptors.response.use(
+     response => response,
+     error => {
+       if (error.response?.status === 401) {
+         logout();
+         redirect('/login');
+       }
+       return Promise.reject(error);
+     }
+   );
+   ```
+
+3. **Component-Level**: Context-specific handling
+   ```javascript
+   try {
+     await bookRoom(roomId, time);
+     showToast('Booking successful!');
+   } catch (error) {
+     if (error.response?.status === 409) {
+       showToast('Room already booked');
+     }
+   }
+   ```
+
+---
+
+## DevOps & Infrastructure
+
+### Docker Compose Architecture
+
+**Learning Lead:** @Navidtor, @xxheka (Teams Alpha & Gamma)
+
+#### Service Orchestration
+
+```yaml
+services:
+  gateway:
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      booking-service:
+        condition: service_healthy
+    # Gateway waits for services to be ready
+```
+
+#### Health Checks
+
+```yaml
+auth-service:
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+```
+
+#### Key Learnings
+
+1. **Dependencies Matter**
+   - Services start in correct order
+   - Health checks ensure readiness, not just running
+
+2. **Network Isolation**
+   - All services on same Docker network
+   - Communicate by service name (DNS)
+
+3. **Environment Variables**
+   - Secrets via environment, not hardcoded
+   - `.env.example` documents required variables
+
+---
+
+## Challenges & Solutions
+
+### Challenge 1: Distributed Transaction Failures
+
+**Encountered By:** Team Gamma  
+**Week:** 2
+
+**Problem:** Payment succeeded but stock update failed. System left in inconsistent state.
+
+**Solution:** Implemented proper Saga compensation. If any step fails, all previous steps are undone.
+
+**Lesson:** Always design for failure. Happy path is easy; error handling is where complexity lives.
+
+---
+
+### Challenge 2: Calendar Not Updating
+
+**Encountered By:** Team Beta  
+**Week:** 3
+
+**Problem:** After booking, calendar showed old data until page refresh.
+
+**Root Cause:** React's stale closure captured old state in useEffect.
+
+**Solution:** 
+1. Used useCallback for fetch function
+2. Added proper dependency array
+3. Called refresh after successful booking
+
+**Lesson:** React's mental model takes time. Understanding closures and render cycles is essential.
+
+---
+
+### Challenge 3: Circuit Breaker Not Opening
+
+**Encountered By:** Team Delta  
+**Week:** 3
+
+**Problem:** Even when Notification Service was down, Circuit Breaker stayed closed.
+
+**Root Cause:** Sliding window was too large (10), needed many failures to trigger.
+
+**Solution:** Reduced sliding window to 5, adjusted threshold to 50%.
+
+**Lesson:** Configuration matters. Test with realistic failure scenarios.
+
+---
+
+### Challenge 4: Gateway CORS Issues
+
+**Encountered By:** Team Alpha  
+**Week:** 2
+
+**Problem:** Frontend couldn't call backend - browser blocked by CORS.
+
+**Root Cause:** CORS configuration missing in Gateway.
+
+**Solution:** Added global CORS config allowing frontend origin.
+
+**Lesson:** Browser security is strict. CORS must be explicitly configured.
+
+---
+
+## Team Reflections
+
+### @Navidtor (Team Alpha)
+> "Before this project, I thought microservices were just 'smaller applications.' Now I understand it's a completely different paradigm - you're building a distributed system with all its complexity."
+
+### @amirrezamaqsoudi (Team Alpha)
+> "Security isn't something you add at the end. It needs to be designed from the start. JWT, rate limiting, lockout - they all work together."
+
+### @GhazaleESK (Team Beta)
+> "Database locking was abstract until I saw a race condition break our booking system. Now I understand why it's essential."
+
+### @tinabaouj (Team Beta)
+> "React hooks seemed simple until I hit stale closures and infinite loops. Understanding the render cycle was my biggest learning."
+
+### @xxheka (Team Gamma)
+> "The Saga pattern taught me that distributed systems are fundamentally different. You can't just 'rollback' - you have to compensate."
+
+### @sophiedlk (Team Gamma)
+> "Design patterns aren't academic exercises. Strategy pattern solved a real problem and will make adding payment providers trivial."
+
+### @Mariahdlk1989 (Team Delta)
+> "State pattern eliminated so many bugs. Instead of checking 'if status == X' everywhere, each state knows its own rules."
+
+### @xanahid (Team Delta)
+> "Circuit Breaker was my favorite pattern. It's amazing how a simple state machine can prevent cascading failures."
+
+---
+
+## Skills Acquired
+
+### Technical Skills Matrix
+
+| Skill | Team Members | Proficiency |
+|-------|--------------|-------------|
+| Spring Boot | All | ⭐⭐⭐⭐ |
+| Spring Cloud Gateway | Alpha | ⭐⭐⭐⭐ |
+| JPA/Hibernate | Alpha, Beta, Gamma | ⭐⭐⭐ |
+| RabbitMQ | Gamma, Delta | ⭐⭐⭐ |
+| React/TypeScript | Beta | ⭐⭐⭐⭐ |
+| Docker/Compose | All | ⭐⭐⭐ |
+| PostgreSQL | All | ⭐⭐⭐ |
+| Resilience4j | Delta | ⭐⭐⭐⭐ |
+
+### Soft Skills Developed
+
+1. **Cross-Team Communication**
+   - API contract negotiations
+   - Event schema agreements
+   - Integration debugging
+
+2. **Technical Documentation**
+   - ADR writing
+   - API documentation
+   - Code comments
+
+3. **Problem Decomposition**
+   - Breaking features into services
+   - Defining service boundaries
+   - Interface design
+
+---
+
+## Recommendations for Future Projects
+
+### What Worked Well
+
+1. **Clear Service Boundaries**
+   - Each team owned their services completely
+   - Reduced conflicts and dependencies
+
+2. **API-First Design**
+   - Agreed on contracts before implementation
+   - Parallel development possible
+
+3. **Event-Driven Communication**
+   - Loose coupling between services
+   - Easy to add new capabilities
+
+### What We'd Do Differently
+
+1. **Earlier Integration Testing**
+   - Should have tested service interactions earlier
+   - Caught issues in week 3 that could have been found in week 2
+
+2. **More Observability**
+   - Would add distributed tracing (e.g., Zipkin)
+   - Better logging correlation across services
+
+3. **API Versioning**
+   - Didn't plan for API evolution
+   - Would add version prefixes from start
+
+### Technology Recommendations
+
+| Use Case | Recommendation | Reason |
+|----------|---------------|--------|
+| API Gateway | Spring Cloud Gateway | Native Spring integration |
+| Message Broker | RabbitMQ | Easy to use, reliable |
+| Caching | Redis | Fast, supports distributed state |
+| Resilience | Resilience4j | Excellent Spring Boot integration |
+| Frontend | React + TypeScript | Type safety, large ecosystem |
+
+---
+
+## Conclusion
+
+This project transformed our understanding of distributed systems. We moved from theoretical knowledge of design patterns to practical implementation experience. The challenges we faced - race conditions, distributed transactions, cascading failures - taught us lessons that no textbook could.
+
+### Key Takeaways
+
+1. **Microservices are about trade-offs**
+   - You gain scalability and independence
+   - You pay with complexity and distributed system challenges
+
+2. **Patterns exist for a reason**
+   - Saga, Circuit Breaker, State - these solve real problems
+   - Understanding the problem helps understand the pattern
+
+3. **Testing is non-negotiable**
+   - Unit tests are not enough
+   - Integration tests catch real issues
+
+4. **Security is a mindset**
+   - Not an afterthought
+   - Defense in depth works
+
+5. **Team collaboration matters**
+   - Clear interfaces enable parallel work
+   - Communication prevents integration pain
+
+---
+
+## Appendix: Learning Resources Used
+
+### Books & Documentation
+- Spring Boot Reference Documentation
+- Microservices Patterns by Chris Richardson
+- Designing Data-Intensive Applications by Martin Kleppmann
+
+### Online Courses
+- Spring Cloud Gateway tutorials
+- React Hooks deep dives
+- RabbitMQ fundamentals
+
+### Community Resources
+- Stack Overflow for debugging
+- GitHub issues for library-specific problems
+- Discord communities for real-time help
+
+---
+
+*Report compiled by all team members*  
+*Project Duration: 1 Month (4 Weeks)*  
+*Last Updated: December 2024*

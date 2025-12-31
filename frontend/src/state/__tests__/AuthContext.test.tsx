@@ -1,10 +1,12 @@
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import { renderHook } from '@testing-library/react';
 import { AuthProvider, useAuth } from '../AuthContext';
 
-// Mock JWT token with base64 encoded payload: {"sub":"user123","role":"STUDENT","tenant":"engineering"}
-const mockToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwicm9sZSI6IlNUVURFTlQiLCJ0ZW5hbnQiOiJlbmdpbmVlcmluZyJ9.mock';
+// Mock JWT token with base64 encoded payload
+// Payload: {"sub":"user123","role":"STUDENT","tenant":"engineering","exp":9999999999}
+// The exp claim is set far in the future (year 2286) so the token never expires in tests
+const mockToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwicm9sZSI6IlNUVURFTlQiLCJ0ZW5hbnQiOiJlbmdpbmVlcmluZyIsImV4cCI6OTk5OTk5OTk5OX0.signature';
 
 // Mock the api client module
 jest.mock('../../api/client', () => ({
@@ -42,7 +44,7 @@ describe('AuthProvider', () => {
     expect(screen.getByTestId('userId')).toHaveTextContent('null');
   });
 
-  it('restores auth state from localStorage on mount', () => {
+  it('restores auth state from localStorage on mount', async () => {
     localStorage.setItem('sup_token', mockToken);
     localStorage.setItem('sup_tenant', 'engineering');
 
@@ -62,17 +64,24 @@ describe('AuthProvider', () => {
       </AuthProvider>
     );
 
-    expect(screen.getByTestId('token')).toHaveTextContent(mockToken);
+    await waitFor(() => {
+      expect(screen.getByTestId('token')).toHaveTextContent(mockToken);
+    });
     expect(screen.getByTestId('tenantId')).toHaveTextContent('engineering');
   });
 
   it('login stores token and updates state', async () => {
     const TestComponent = () => {
       const { token, login } = useAuth();
+      
+      const handleLogin = async () => {
+        await login(mockToken, 'science');
+      };
+      
       return (
         <div>
           <span data-testid="token">{token ?? 'null'}</span>
-          <button onClick={() => login(mockToken, 'science')}>Login</button>
+          <button onClick={handleLogin}>Login</button>
         </div>
       );
     };
@@ -85,16 +94,20 @@ describe('AuthProvider', () => {
 
     expect(screen.getByTestId('token')).toHaveTextContent('null');
 
-    act(() => {
+    await act(async () => {
       screen.getByRole('button', { name: /Login/i }).click();
     });
 
-    expect(screen.getByTestId('token')).toHaveTextContent(mockToken);
+    // Wait for the state to update
+    await waitFor(() => {
+      expect(screen.getByTestId('token')).toHaveTextContent(mockToken);
+    });
+
     expect(localStorage.getItem('sup_token')).toBe(mockToken);
     expect(localStorage.getItem('sup_tenant')).toBe('science');
   });
 
-  it('logout clears token and localStorage', () => {
+  it('logout clears token and localStorage', async () => {
     localStorage.setItem('sup_token', mockToken);
     localStorage.setItem('sup_tenant', 'engineering');
 
@@ -115,27 +128,33 @@ describe('AuthProvider', () => {
     );
 
     // Initially loaded from localStorage
-    expect(screen.getByTestId('token')).toHaveTextContent(mockToken);
+    await waitFor(() => {
+      expect(screen.getByTestId('token')).toHaveTextContent(mockToken);
+    });
 
-    act(() => {
+    await act(async () => {
       screen.getByRole('button', { name: /Logout/i }).click();
     });
 
-    expect(screen.getByTestId('token')).toHaveTextContent('null');
+    await waitFor(() => {
+      expect(screen.getByTestId('token')).toHaveTextContent('null');
+    });
     expect(localStorage.getItem('sup_token')).toBeNull();
     expect(localStorage.getItem('sup_tenant')).toBeNull();
   });
 
-  it('decodes JWT payload correctly', () => {
+  it('decodes JWT payload correctly', async () => {
     const TestComponent = () => {
       const { login, role, userId } = useAuth();
+      const [ready, setReady] = React.useState(false);
       
       React.useEffect(() => {
-        login(mockToken, null);
+        login(mockToken, null).then(() => setReady(true));
       }, [login]);
 
       return (
         <div>
+          <span data-testid="ready">{ready ? 'yes' : 'no'}</span>
           <span data-testid="role">{role ?? 'null'}</span>
           <span data-testid="userId">{userId ?? 'null'}</span>
         </div>
@@ -148,8 +167,48 @@ describe('AuthProvider', () => {
       </AuthProvider>
     );
 
+    // Wait for login to complete
+    await waitFor(() => {
+      expect(screen.getByTestId('ready')).toHaveTextContent('yes');
+    });
+
     expect(screen.getByTestId('role')).toHaveTextContent('STUDENT');
     expect(screen.getByTestId('userId')).toHaveTextContent('user123');
+  });
+
+  it('login returns false for invalid token', async () => {
+    const invalidToken = 'not-a-valid-jwt';
+    let loginResult: boolean | null = null;
+    
+    const TestComponent = () => {
+      const { login, token } = useAuth();
+      
+      const handleLogin = async () => {
+        loginResult = await login(invalidToken, 'test');
+      };
+
+      return (
+        <div>
+          <span data-testid="token">{token ?? 'null'}</span>
+          <button onClick={handleLogin}>Login</button>
+        </div>
+      );
+    };
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>
+    );
+
+    await act(async () => {
+      screen.getByRole('button', { name: /Login/i }).click();
+      // Wait a bit for the promise to resolve
+      await new Promise(resolve => setTimeout(resolve, 10));
+    });
+
+    expect(loginResult).toBe(false);
+    expect(screen.getByTestId('token')).toHaveTextContent('null');
   });
 });
 

@@ -70,21 +70,34 @@ describe('ErrorBoundary Component', () => {
   });
 
   it('resets error state when Try Again is clicked', async () => {
+    // Use a controllable error state via a wrapper
+    let shouldThrow = true;
+    
+    const ControllableThrowError = () => {
+      if (shouldThrow) {
+        throw new Error('Test error');
+      }
+      return <div>No error</div>;
+    };
+    
     const { rerender } = render(
       <ErrorBoundary>
-        <ThrowError shouldThrow={true} />
+        <ControllableThrowError />
       </ErrorBoundary>
     );
     
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
     
-    // Click Try Again
+    // Change the throw state BEFORE clicking reset
+    shouldThrow = false;
+    
+    // Click Try Again - this will reset and re-render children
     fireEvent.click(screen.getByText('Try Again'));
     
-    // Re-render with non-throwing component
+    // Force a re-render to pick up the new state
     rerender(
       <ErrorBoundary>
-        <ThrowError shouldThrow={false} />
+        <ControllableThrowError />
       </ErrorBoundary>
     );
     
@@ -147,8 +160,8 @@ describe('ErrorBoundary Component', () => {
       </ErrorBoundary>
     );
     
-    // Should show retrying state for network errors
-    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    // Should show retrying state for network errors (auto-retry kicks in)
+    expect(screen.getByText('Retrying...')).toBeInTheDocument();
   });
 
   it('renders error icon', () => {

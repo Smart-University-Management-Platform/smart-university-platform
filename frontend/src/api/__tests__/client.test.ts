@@ -111,6 +111,71 @@ describe('API Client', () => {
         },
       });
     });
+
+    it('handles 429 Too Many Requests (rate limiting)', async () => {
+      mockAxios.onPost('/auth/login').reply(429, { message: 'Too many requests' });
+
+      await expect(api.post('/auth/login', {})).rejects.toMatchObject({
+        response: {
+          status: 429,
+        },
+      });
+    });
+
+    it('handles 403 Forbidden', async () => {
+      mockAxios.onGet('/admin/data').reply(403, { message: 'Forbidden' });
+
+      await expect(api.get('/admin/data')).rejects.toMatchObject({
+        response: {
+          status: 403,
+          data: { message: 'Forbidden' },
+        },
+      });
+    });
+
+    it('handles 423 Locked (account lockout)', async () => {
+      mockAxios.onPost('/auth/login').reply(423, { message: 'Account is locked' });
+
+      await expect(api.post('/auth/login', {})).rejects.toMatchObject({
+        response: {
+          status: 423,
+          data: { message: 'Account is locked' },
+        },
+      });
+    });
+
+    it('handles 402 Payment Required', async () => {
+      mockAxios.onPost('/market/orders/checkout').reply(402, { message: 'Payment required' });
+
+      await expect(api.post('/market/orders/checkout', {})).rejects.toMatchObject({
+        response: {
+          status: 402,
+          data: { message: 'Payment required' },
+        },
+      });
+    });
+
+    it('handles 409 Conflict', async () => {
+      mockAxios.onPost('/booking/reservations').reply(409, { message: 'Slot already booked' });
+
+      await expect(api.post('/booking/reservations', {})).rejects.toMatchObject({
+        response: {
+          status: 409,
+          data: { message: 'Slot already booked' },
+        },
+      });
+    });
+
+    it('handles 400 Bad Request', async () => {
+      mockAxios.onPost('/auth/register').reply(400, { message: 'Invalid data' });
+
+      await expect(api.post('/auth/register', {})).rejects.toMatchObject({
+        response: {
+          status: 400,
+          data: { message: 'Invalid data' },
+        },
+      });
+    });
   });
 
   describe('useConfiguredApi', () => {

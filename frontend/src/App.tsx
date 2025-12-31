@@ -1,17 +1,37 @@
 import React from 'react';
 import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import { useAuth, AuthProvider } from './state/AuthContext';
+import { ThemeProvider } from './state/ThemeContext';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { BookingPage } from './pages/BookingPage';
 import { MarketplacePage } from './pages/MarketplacePage';
 import { ExamsPage } from './pages/ExamsPage';
+import { AdminPage } from './pages/AdminPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { ToastProvider } from './components/Toast';
 import { ServiceStatus } from './components/ServiceStatus';
+import { ThemeToggle } from './components/ThemeToggle';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const Protected: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token } = useAuth();
+  const { token, isLoading } = useAuth();
+  
+  // Wait for auth to finish loading before deciding to redirect
+  if (isLoading) {
+    return (
+      <div className="app-grid">
+        <section className="card">
+          <div className="loading-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '2rem' }}>
+            <div className="spinner" />
+            <span>Loading...</span>
+          </div>
+        </section>
+      </div>
+    );
+  }
+  
   if (!token) {
     return <Navigate to="/login" replace />;
   }
@@ -45,14 +65,23 @@ const AppContent: React.FC = () => {
           <NavLink to="/exams" className={({ isActive }) => 'app-nav-link' + (isActive ? ' app-nav-link-active' : '')}>
             Exams
           </NavLink>
+          {role === 'ADMIN' && (
+            <NavLink to="/admin" className={({ isActive }) => 'app-nav-link' + (isActive ? ' app-nav-link-active' : '')}>
+              Admin
+            </NavLink>
+          )}
         </nav>
         <div className="app-nav-user">
           <ServiceStatus />
+          <ThemeToggle size="sm" />
           {token ? (
             <>
-              <div className="app-nav-pill">
-                <span>{role ?? 'USER'}</span> · {tenantId ?? 'tenant'}
-              </div>
+              <NavLink to="/profile" className="app-nav-profile-link">
+                <span className="app-nav-avatar">{role === 'ADMIN' ? '👑' : role === 'TEACHER' ? '📚' : '🎓'}</span>
+                <div className="app-nav-pill">
+                  <span>{role ?? 'USER'}</span> · {tenantId ?? 'tenant'}
+                </div>
+              </NavLink>
               <button type="button" className="app-nav-logout" onClick={logout}>
                 Logout
               </button>
@@ -74,7 +103,9 @@ const AppContent: React.FC = () => {
             path="/dashboard"
             element={
               <Protected>
-                <DashboardPage />
+                <ErrorBoundary>
+                  <DashboardPage />
+                </ErrorBoundary>
               </Protected>
             }
           />
@@ -82,7 +113,9 @@ const AppContent: React.FC = () => {
             path="/booking"
             element={
               <Protected>
-                <BookingPage />
+                <ErrorBoundary>
+                  <BookingPage />
+                </ErrorBoundary>
               </Protected>
             }
           />
@@ -90,7 +123,9 @@ const AppContent: React.FC = () => {
             path="/market"
             element={
               <Protected>
-                <MarketplacePage />
+                <ErrorBoundary>
+                  <MarketplacePage />
+                </ErrorBoundary>
               </Protected>
             }
           />
@@ -98,7 +133,29 @@ const AppContent: React.FC = () => {
             path="/exams"
             element={
               <Protected>
-                <ExamsPage />
+                <ErrorBoundary>
+                  <ExamsPage />
+                </ErrorBoundary>
+              </Protected>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <Protected>
+                <ErrorBoundary>
+                  <AdminPage />
+                </ErrorBoundary>
+              </Protected>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <Protected>
+                <ErrorBoundary>
+                  <ProfilePage />
+                </ErrorBoundary>
               </Protected>
             }
           />
@@ -114,8 +171,10 @@ const AppContent: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ThemeProvider>
   );
 };

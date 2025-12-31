@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useConfiguredApi } from '../api/client';
 import { useAuth } from '../state/AuthContext';
 import { useToast } from '../components/Toast';
@@ -9,6 +9,8 @@ type ExamSummary = {
   description?: string;
   state: string;
   startTime: string;
+  durationMinutes?: number;
+  creatorId?: string;
 };
 
 type ExamDetail = {
@@ -17,273 +19,525 @@ type ExamDetail = {
   description?: string;
   state: string;
   startTime: string;
+  durationMinutes?: number;
   questions: { id: string; text: string; sortOrder: number }[];
 };
 
+type Question = {
+  text: string;
+  type: 'TEXT' | 'MULTIPLE_CHOICE';
+};
+
+const formatTimeRemaining = (seconds: number): string => {
+  if (seconds <= 0) return '00:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
+/**
+ * ExamsPage component with FIXES:
+ * - FIX #4: Timer useEffect uses proper dependency (timerActive state)
+ * - FIX #5: handleStudentSubmit wrapped in useCallback with proper dependencies
+ */
 export const ExamsPage: React.FC = () => {
   const api = useConfiguredApi();
-  const { role } = useAuth();
+  const { role, userId } = useAuth();
   const { showToast } = useToast();
 
   const [exams, setExams] = useState<ExamSummary[]>([]);
   const [loadingExams, setLoadingExams] = useState(true);
   const [examsError, setExamsError] = useState<string | null>(null);
 
-  const [title, setTitle] = useState('Sample exam');
-  const [question, setQuestion] = useState('What is microservices architecture?');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [questions, setQuestions] = useState<Question[]>([{ text: '', type: 'TEXT' }]);
   const [createdExamId, setCreatedExamId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
-  const [submitExamId, setSubmitExamId] = useState('');
+  const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [loadedExam, setLoadedExam] = useState<ExamDetail | null>(null);
   const [answersByQuestion, setAnswersByQuestion] = useState<Record<string, string>>({});
   const [loadingExamDetail, setLoadingExamDetail] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
 
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
+  // FIX #4: Add timerActive state to control timer lifecycle
+  const [timerActive, setTimerActive] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  const isTeacherOrAdmin = role === 'TEACHER' || role === 'ADMIN';
+
+  // Helper to extract array from paginated or plain array response
+  const extractArray = <T,>(data: T[] | { content?: T[] } | null | undefined): T[] => {
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object' && 'content' in data && Array.isArray(data.content)) {
+      return data.content;
+    }
+    return [];
+  };
+
+  // Load exams list
   useEffect(() => {
     let cancelled = false;
     const loadExams = async () => {
       setExamsError(null);
       try {
-        const res = await api.get<ExamSummary[]>('/exam/exams');
-        if (!cancelled) {
-          setExams(res.data);
-        }
-      } catch (_err: any) {
-        if (!cancelled) {
-          setExamsError('Failed to load exams');
-        }
+        const res = await api.get('/exam/exams');
+        // Handle both paginated (Spring Page) and plain array responses
+        if (!cancelled) setExams(extractArray(res.data));
+      } catch (_err) {
+        if (!cancelled) setExamsError('Failed to load exams');
       } finally {
-        if (!cancelled) {
-          setLoadingExams(false);
-        }
+        if (!cancelled) setLoadingExams(false);
       }
     };
     loadExams();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [api]);
+
+  // FIX #4: Timer useEffect with proper dependency on timerActive
+  useEffect(() => {
+    // Only run if timer is active and there's time remaining
+    if (!timerActive || timeRemaining === null || timeRemaining <= 0) {
+      return;
+    }
+
+    timerRef.current = window.setInterval(() => {
+      setTimeRemaining(prev => {
+        if (prev === null || prev <= 1) {
+          // Time's up - stop the timer
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          setTimerActive(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    // Cleanup on unmount or when dependencies change
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [timerActive]); // FIX #4: Only depend on timerActive, not timeRemaining
+
+  // FIX #5: Wrap handleStudentSubmit in useCallback with proper dependencies
+  const handleStudentSubmit = useCallback(async () => {
+    if (!loadedExam || hasSubmitted || isSubmitting) return;
+    
+    setIsSubmitting(true);
+    const answers: Record<string, string> = {};
+    loadedExam.questions.forEach((q, idx) => { 
+      answers[`q${idx + 1}`] = answersByQuestion[q.id] ?? ''; 
+    });
+    
+    try {
+      await api.post(`/exam/exams/${loadedExam.id}/submit`, { answers });
+      setHasSubmitted(true);
+      showToast('Exam submitted!', 'success');
+      
+      // Stop the timer
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setTimerActive(false);
+      setTimeRemaining(null);
+    } catch (err: any) {
+      const status = err.response?.status;
+      let msg = err.response?.data?.message ?? 'Failed to submit';
+      
+      if (status === 409) {
+        // Already submitted or exam not accepting submissions
+        msg = err.response?.data?.message ?? 'Cannot submit - exam may be closed or already submitted.';
+      } else if (status === 403) {
+        msg = 'You do not have permission to submit this exam.';
+      } else if (status === 400) {
+        msg = err.response?.data?.message ?? 'Invalid submission format.';
+      }
+      
+      setStatus(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [api, loadedExam, answersByQuestion, hasSubmitted, isSubmitting, showToast]);
+
+  // FIX #5: Auto-submit effect with proper dependencies
+  useEffect(() => {
+    if (timeRemaining === 0 && loadedExam && !hasSubmitted && !isSubmitting) {
+      handleStudentSubmit();
+      showToast('Time\u2019s up! Exam auto-submitted.', 'warning');
+    }
+  }, [timeRemaining, loadedExam, hasSubmitted, isSubmitting, handleStudentSubmit, showToast]);
+
+  const addQuestion = () => setQuestions(prev => [...prev, { text: '', type: 'TEXT' }]);
+  const updateQuestion = (idx: number, text: string) => {
+    setQuestions(prev => prev.map((q, i) => i === idx ? { ...q, text } : q));
+  };
+  const removeQuestion = (idx: number) => {
+    if (questions.length > 1) setQuestions(prev => prev.filter((_, i) => i !== idx));
+  };
 
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatus(null);
+    setIsCreating(true);
+
+    // Frontend validation matching backend constraints
+    if (title.length < 3) {
+      setStatus('Title must be at least 3 characters');
+      setIsCreating(false);
+      return;
+    }
+    if (title.length > 200) {
+      setStatus('Title must not exceed 200 characters');
+      setIsCreating(false);
+      return;
+    }
+    if (description && description.length > 1000) {
+      setStatus('Description must not exceed 1000 characters');
+      setIsCreating(false);
+      return;
+    }
+
+    const validQuestions = questions.filter(q => q.text.trim());
+    if (validQuestions.length === 0) {
+      setStatus('Add at least one question');
+      setIsCreating(false);
+      return;
+    }
+
+    // Validate question text lengths
+    for (let i = 0; i < validQuestions.length; i++) {
+      if (validQuestions[i].text.length > 1000) {
+        setStatus(`Question ${i + 1} must not exceed 1000 characters`);
+        setIsCreating(false);
+        return;
+      }
+    }
+
     try {
+      // Note: durationMinutes is frontend-only for timer display, not sent to backend
       const res = await api.post('/exam/exams', {
-        title,
-        description: 'Demo exam',
-        startTime: new Date().toISOString(),
-        questions: [{ text: question }]
+        title, 
+        description: description || null, 
+        startTime: new Date(Date.now() + 60000).toISOString(), // Set start time 1 minute in future to pass @FutureOrPresent validation
+        questions: validQuestions.map(q => ({ text: q.text }))
       });
       setCreatedExamId(res.data.id);
-      setStatus('Exam created. You can now start it.');
+      setStatus('Exam created! You can now start it.');
       showToast('Exam created!', 'success');
-      // Refresh list
-      const listRes = await api.get<ExamSummary[]>('/exam/exams');
-      setExams(listRes.data);
+      const listRes = await api.get('/exam/exams');
+      setExams(extractArray(listRes.data));
+      setTitle(''); setDescription(''); setQuestions([{ text: '', type: 'TEXT' }]);
     } catch (err: any) {
-      setStatus(err.response?.data?.message ?? 'Failed to create exam');
+      const status = err.response?.status;
+      let msg = err.response?.data?.message ?? 'Failed to create exam';
+      
+      if (status === 403) {
+        msg = 'Only teachers or admins can create exams.';
+      } else if (status === 400) {
+        msg = err.response?.data?.message ?? 'Invalid exam data. Please check your inputs.';
+      } else if (status === 429) {
+        msg = 'Too many requests. Please wait a moment before trying again.';
+      }
+      
+      setStatus(msg);
+    } finally {
+      setIsCreating(false);
     }
   };
 
-  const handleStartExam = async () => {
-    if (!createdExamId) {
-      setStatus('Create an exam first');
-      return;
-    }
+  const handleStartExam = async (examId: string) => {
     setStatus(null);
     try {
-      const res = await api.post(`/exam/exams/${createdExamId}/start`);
-      setStatus(`Exam started. State: ${res.data.state}`);
-      const listRes = await api.get<ExamSummary[]>('/exam/exams');
-      setExams(listRes.data);
+      await api.post(`/exam/exams/${examId}/start`);
+      showToast('Exam is now live!', 'success');
+      const listRes = await api.get('/exam/exams');
+      setExams(extractArray(listRes.data));
     } catch (err: any) {
-      setStatus(err.response?.data?.message ?? 'Failed to start exam');
+      const status = err.response?.status;
+      let msg = err.response?.data?.message ?? 'Failed to start exam';
+      
+      if (status === 403) {
+        msg = 'Only the exam creator can start the exam.';
+      } else if (status === 409) {
+        msg = err.response?.data?.message ?? 'Exam cannot be started in its current state.';
+      }
+      
+      setStatus(msg);
     }
   };
 
-  const handleLoadExamDetail = async () => {
+  /**
+   * FIX #3: Close/End exam - stops accepting submissions
+   * Only teachers/admins can close their own exams
+   */
+  const handleEndExam = async (examId: string) => {
     setStatus(null);
-    if (!submitExamId) {
-      setStatus('Provide an exam ID to load.');
-      return;
+    try {
+      await api.post(`/exam/exams/${examId}/close`);
+      showToast('Exam closed! No more submissions accepted.', 'success');
+      const listRes = await api.get('/exam/exams');
+      setExams(extractArray(listRes.data));
+    } catch (err: any) {
+      const status = err.response?.status;
+      let msg = err.response?.data?.message ?? 'Failed to close exam';
+      
+      if (status === 403) {
+        msg = 'Only the exam creator can close the exam.';
+      } else if (status === 409) {
+        msg = err.response?.data?.message ?? 'Exam cannot be closed in its current state.';
+      }
+      
+      setStatus(msg);
     }
+  };
+
+  const handleLoadExam = async (examId: string) => {
+    setStatus(null);
     setLoadingExamDetail(true);
+    const previousSelectedExamId = selectedExamId;
+    setSelectedExamId(examId);
     try {
-      const res = await api.get<ExamDetail>(`/exam/exams/${submitExamId}`);
+      const res = await api.get<ExamDetail>(`/exam/exams/${examId}`);
+      
+      // Defensive check: ensure we have valid exam data
+      if (!res.data || typeof res.data !== 'object') {
+        throw new Error('Invalid exam data received');
+      }
+      
+      // Clear existing timer state only once we are ready to swap exams
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setTimerActive(false);
+      setTimeRemaining(null);
       setLoadedExam(res.data);
       setAnswersByQuestion({});
+      setHasSubmitted(false);
+      
+      // FIX #4: Properly initialize timer
+      if (res.data.durationMinutes) {
+        setTimeRemaining(res.data.durationMinutes * 60);
+        setTimerActive(true); // Start the timer
+      }
     } catch (err: any) {
-      setLoadedExam(null);
-      setStatus(err.response?.data?.message ?? 'Failed to load exam details');
+      setSelectedExamId(previousSelectedExamId);
+      setStatus(err.response?.data?.message ?? 'Failed to load exam');
     } finally {
       setLoadingExamDetail(false);
     }
   };
 
-  const handleAnswerChange = (questionId: string, value: string) => {
-    setAnswersByQuestion((prev) => ({ ...prev, [questionId]: value }));
+  const handleCloseExam = () => {
+    setLoadedExam(null); 
+    setSelectedExamId(null); 
+    setAnswersByQuestion({});
+    setHasSubmitted(false);
+    
+    // FIX #4: Properly clean up timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setTimerActive(false);
+    setTimeRemaining(null);
   };
 
-  const handleStudentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setStatus(null);
-
-    if (!loadedExam) {
-      setStatus('Load exam details before submitting.');
-      return;
-    }
-
-    const answers: Record<string, string> = {};
-    loadedExam.questions.forEach((q, index) => {
-      const key = `q${index + 1}`;
-      answers[key] = answersByQuestion[q.id] ?? '';
-    });
-
-    const hasAnyAnswer = Object.values(answers).some((a) => a.trim().length > 0);
-    if (!hasAnyAnswer) {
-      setStatus('Provide at least one answer.');
-      return;
-    }
-
-    try {
-      const payload = { answers };
-      await api.post(`/exam/exams/${loadedExam.id}/submit`, payload);
-      setStatus('Submission sent successfully.');
-      setAnswersByQuestion({});
-    } catch (err: any) {
-      setStatus(err.response?.data?.message ?? 'Failed to submit answers');
-    }
-  };
-
-  const isTeacherOrAdmin = role === 'TEACHER' || role === 'ADMIN';
+  // Students see exams that are LIVE (backend) or IN_PROGRESS (legacy naming)
+  const availableExams = exams.filter(e => e.state === 'IN_PROGRESS' || e.state === 'LIVE');
 
   return (
-    <section className="card">
-      <div className="card-header">
-        <div>
-          <div className="card-title">Exam orchestration</div>
-          <div className="card-subtitle">Create, start, and submit exams</div>
+    <div className="exams-page">
+      <section className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title"><span className="title-icon">📝</span>Exam Center</div>
+            <div className="card-subtitle">{isTeacherOrAdmin ? 'Create and manage exams' : 'View and take exams'}</div>
+          </div>
+          <div className="chip">State machine</div>
         </div>
-        <div className="chip">State + Circuit Breaker demo</div>
-      </div>
 
-      <div className="card-subtitle" style={{ marginBottom: '0.4rem', marginTop: '0.5rem' }}>
-        Existing exams for this tenant
-      </div>
-      {loadingExams && <div className="card-subtitle">Loading exams…</div>}
-      {!loadingExams && examsError && (
-        <div className="card-subtitle text-danger">{examsError}</div>
-      )}
-      {!loadingExams && !examsError && exams.length === 0 && (
-        <div className="card-subtitle">No exams yet. Teachers can create one below.</div>
-      )}
-      {!loadingExams && !examsError && exams.length > 0 && (
-        <ul
-          className="card-subtitle"
-          style={{ paddingLeft: '1.2rem', marginBottom: '0.8rem' }}
-        >
-          {exams.map((e) => (
-            <li key={e.id}>
-              <code>{e.id}</code> – {e.title} ({e.state})
-            </li>
-          ))}
-        </ul>
-      )}
+        <h3 className="section-title">{isTeacherOrAdmin ? '📋 All Exams' : '📋 Available Exams'}</h3>
+        
+        {loadingExams ? (
+          <div className="loading-state"><div className="spinner" /><span>Loading...</span></div>
+        ) : examsError ? (
+          <div className="error-state">⚠️ {examsError}</div>
+        ) : (
+          <>
+            {isTeacherOrAdmin ? (
+              exams.length === 0 ? (
+                <div className="empty-state"><span className="empty-icon">📭</span><p>No exams yet.</p></div>
+              ) : (
+                <div className="exam-list">
+                  {exams.map(exam => (
+                    <div key={exam.id} className="exam-card">
+                      <div className="exam-info">
+                        <span className="exam-title">{exam.title}</span>
+                        <span className="exam-id">ID: {exam.id.slice(0, 8)}...</span>
+                      </div>
+                      <span className={`exam-state ${exam.state.toLowerCase().replace('_', '-')}`}>{exam.state}</span>
+                      {/* FIX #3: Show Start button for DRAFT and SCHEDULED exams */}
+                      {(exam.state === 'DRAFT' || exam.state === 'SCHEDULED') && (
+                        <button className="btn-primary btn-sm" onClick={() => handleStartExam(exam.id)}>Start</button>
+                      )}
+                      {/* FIX #3: Show Close button for LIVE/IN_PROGRESS exams */}
+                      {(exam.state === 'LIVE' || exam.state === 'IN_PROGRESS') && (
+                        <button className="btn-danger btn-sm" onClick={() => handleEndExam(exam.id)}>Close</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              availableExams.length === 0 ? (
+                <div className="empty-state"><span className="empty-icon">📭</span><p>No exams available now.</p></div>
+              ) : (
+                <div className="exam-list">
+                  {availableExams.map(exam => (
+                    <div key={exam.id} className="exam-card student">
+                      <div className="exam-info">
+                        <span className="exam-title">{exam.title}</span>
+                        {exam.durationMinutes && <span className="exam-duration">⏱️ {exam.durationMinutes} min</span>}
+                      </div>
+                      <button className="btn-primary" onClick={() => handleLoadExam(exam.id)} disabled={loadingExamDetail}>
+                        {loadingExamDetail && selectedExamId === exam.id ? 'Loading...' : 'Take Exam'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+          </>
+        )}
+      </section>
 
       {isTeacherOrAdmin && (
-        <>
-          <form onSubmit={handleCreateExam}>
-            <div className="form-field">
-              <label className="form-label">Exam title</label>
-              <input
-                className="form-input"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-              />
+        <section className="card">
+          <div className="card-header"><div><div className="card-title">✨ Create Exam</div></div></div>
+          <form onSubmit={handleCreateExam} className="create-exam-form">
+            <div className="form-row">
+              <div className="form-field" style={{flex:1}}>
+                <label className="form-label">Title</label>
+                <input className="form-input" value={title} onChange={e => setTitle(e.target.value)} required />
+              </div>
+              <div className="form-field" style={{width:'120px'}}>
+                <label className="form-label">Duration</label>
+                <input className="form-input" type="number" min="5" value={durationMinutes} onChange={e => setDurationMinutes(parseInt(e.target.value)||60)} />
+              </div>
             </div>
-            <div className="form-field">
-              <label className="form-label">Question</label>
-              <input
-                className="form-input"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                required
-              />
+            <div className="questions-section">
+              <label className="form-label">Questions</label>
+              {questions.map((q, idx) => (
+                <div key={idx} className="question-item">
+                  <span className="q-num">Q{idx+1}</span>
+                  <input className="form-input" value={q.text} onChange={e => updateQuestion(idx, e.target.value)} placeholder="Question text..." />
+                  {questions.length > 1 && <button type="button" className="btn-icon" onClick={() => removeQuestion(idx)}>🗑️</button>}
+                </div>
+              ))}
+              <button type="button" className="btn-ghost btn-sm" onClick={addQuestion}>➕ Add Question</button>
             </div>
-            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.5rem' }}>
-              <button type="submit" className="btn-primary">
-                Create exam
-              </button>
-              <button type="button" className="btn-ghost" onClick={handleStartExam}>
-                Start exam
-              </button>
-            </div>
+            <button type="submit" className="btn-primary" disabled={isCreating}>{isCreating ? 'Creating...' : 'Create Exam'}</button>
           </form>
-          {createdExamId && (
-            <div className="card-subtitle" style={{ marginTop: '0.7rem' }}>
-              Exam ID: <code>{createdExamId}</code>
-            </div>
-          )}
-        </>
+        </section>
       )}
 
-      {!isTeacherOrAdmin && (
-        <form onSubmit={handleStudentSubmit} style={{ marginTop: '0.8rem' }}>
-          <div className="form-field">
-            <label className="form-label">Exam ID</label>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <input
-                className="form-input"
-                value={submitExamId}
-                onChange={(e) => setSubmitExamId(e.target.value)}
-                placeholder="Paste the exam ID shared by your teacher"
-                required
-              />
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={handleLoadExamDetail}
-                disabled={loadingExamDetail}
-              >
-                {loadingExamDetail ? 'Loading…' : 'Load exam'}
-              </button>
+      {!isTeacherOrAdmin && loadedExam && (
+        <section className="card exam-taking">
+          <div className="card-header">
+            <div><div className="card-title">{loadedExam.title}</div></div>
+            <div className="exam-controls">
+              {timeRemaining !== null && (
+                <div className={`timer ${timeRemaining < 300 ? 'warning' : ''}`}>⏱️ {formatTimeRemaining(timeRemaining)}</div>
+              )}
+              <button className="btn-ghost btn-sm" onClick={handleCloseExam}>✕</button>
             </div>
           </div>
-
-          {loadedExam && (
-            <div className="form-field">
-              <label className="form-label">Questions for {loadedExam.title}</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                {loadedExam.questions.map((q, idx) => (
-                  <div key={q.id}>
-                    <div className="card-subtitle" style={{ marginBottom: '0.2rem' }}>
-                      Q{idx + 1}: {q.text}
-                    </div>
-                    <textarea
-                      aria-label={`Answer for ${q.text}`}
-                      className="form-input"
-                      style={{ minHeight: '80px', borderRadius: '14px' }}
-                      value={answersByQuestion[q.id] ?? ''}
-                      onChange={(e) => handleAnswerChange(q.id, e.target.value)}
-                    />
+          {hasSubmitted ? (
+            <div className="submission-success">
+              <span className="success-icon">✅</span>
+              <h3>Submitted!</h3>
+              <p>Your answers have been recorded.</p>
+            </div>
+          ) : (
+            <form onSubmit={e => { e.preventDefault(); handleStudentSubmit(); }}>
+              <div className="questions-list">
+                {Array.isArray(loadedExam.questions) && loadedExam.questions.sort((a,b) => a.sortOrder - b.sortOrder).map((q, idx) => (
+                  <div key={q.id} className="answer-item">
+                    <label className="q-label"><span className="q-num">Q{idx+1}</span> {q.text}</label>
+                    <textarea className="form-input" rows={4} value={answersByQuestion[q.id] ?? ''} 
+                      onChange={e => setAnswersByQuestion(prev => ({...prev, [q.id]: e.target.value}))} placeholder="Your answer..." disabled={loadingExamDetail} />
                   </div>
                 ))}
               </div>
-            </div>
+              <div className="submit-section">
+                <button type="submit" className="btn-primary btn-lg" disabled={isSubmitting || loadingExamDetail}>
+                  {isSubmitting ? 'Submitting...' : '📤 Submit Exam'}
+                </button>
+              </div>
+            </form>
           )}
-
-          <button type="submit" className="btn-primary">
-            Submit answers
-          </button>
-        </form>
+        </section>
       )}
 
-      {status && (
-        <div className="card-subtitle" style={{ marginTop: '0.7rem' }}>
-          {status}
-        </div>
-      )}
-    </section>
+      {status && <div className="status-msg">{status}</div>}
+
+      <style>{`
+        .exams-page { display: flex; flex-direction: column; gap: 1.5rem; }
+        .title-icon { margin-right: 0.5rem; }
+        .section-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 1rem; }
+        .loading-state { display: flex; align-items: center; justify-content: center; gap: 0.75rem; padding: 2rem; color: var(--muted); }
+        .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .error-state { padding: 1rem; background: var(--danger-soft); border-radius: var(--radius); color: var(--danger); }
+        .empty-state { text-align: center; padding: 2rem; color: var(--muted); }
+        .empty-icon { font-size: 2.5rem; display: block; margin-bottom: 0.5rem; }
+        .exam-list { display: flex; flex-direction: column; gap: 0.75rem; }
+        .exam-card { display: flex; align-items: center; gap: 1rem; padding: 1rem; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); }
+        .exam-card.student { flex-direction: column; align-items: flex-start; }
+        .exam-info { flex: 1; display: flex; flex-direction: column; gap: 0.25rem; }
+        .exam-title { font-weight: 600; color: var(--text); }
+        .exam-id { font-size: 0.75rem; color: var(--muted); font-family: monospace; }
+        .exam-duration { font-size: 0.8rem; color: var(--accent); }
+        .exam-state { font-size: 0.7rem; font-weight: 600; padding: 0.25rem 0.75rem; border-radius: 999px; text-transform: uppercase; }
+        .exam-state.draft { background: var(--warning-soft); color: var(--warning); }
+        .exam-state.in-progress { background: var(--success-soft); color: var(--success); }
+        .btn-sm { padding: 0.375rem 0.875rem !important; font-size: 0.8rem !important; }
+        .btn-lg { padding: 0.875rem 2rem !important; font-size: 1rem !important; }
+        .btn-icon { background: none; border: none; cursor: pointer; padding: 0.25rem; opacity: 0.6; }
+        .btn-icon:hover { opacity: 1; }
+        .create-exam-form { display: flex; flex-direction: column; gap: 1rem; }
+        .form-row { display: flex; gap: 1rem; }
+        .questions-section { display: flex; flex-direction: column; gap: 0.75rem; }
+        .question-item { display: flex; align-items: center; gap: 0.75rem; }
+        .q-num { font-weight: 600; color: var(--accent); min-width: 30px; }
+        .question-item .form-input { flex: 1; }
+        .exam-taking { border-color: var(--accent); }
+        .exam-controls { display: flex; align-items: center; gap: 1rem; }
+        .timer { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; padding: 0.5rem 1rem; background: var(--bg-elevated); border-radius: var(--radius); border: 1px solid var(--border); }
+        .timer.warning { color: var(--danger); background: var(--danger-soft); border-color: var(--danger); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .questions-list { display: flex; flex-direction: column; gap: 1.5rem; }
+        .answer-item { display: flex; flex-direction: column; gap: 0.5rem; }
+        .q-label { display: flex; gap: 0.75rem; font-size: 0.95rem; color: var(--text); }
+        .submit-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border); text-align: center; }
+        .submission-success { text-align: center; padding: 3rem 1rem; }
+        .success-icon { font-size: 4rem; display: block; margin-bottom: 1rem; }
+        .submission-success h3 { margin: 0 0 0.5rem; color: var(--success); }
+        .status-msg { padding: 1rem; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); text-align: center; }
+      `}</style>
+    </div>
   );
 };

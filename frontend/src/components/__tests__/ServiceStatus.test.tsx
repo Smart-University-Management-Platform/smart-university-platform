@@ -115,6 +115,11 @@ describe('ServiceStatus', () => {
 
     render(<ServiceStatus />);
 
+    // Wait for initial render and health check
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+    });
+
     // Expand dropdown
     fireEvent.click(screen.getByRole('button'));
 
@@ -126,12 +131,13 @@ describe('ServiceStatus', () => {
     mockFetch.mockClear();
 
     // Click refresh
-    fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
+      jest.advanceTimersByTime(100);
+    });
 
     // Should trigger new health checks
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
-    });
+    expect(mockFetch).toHaveBeenCalled();
   });
 
   it('displays "down" status when service fails', async () => {
@@ -240,9 +246,12 @@ describe('ServiceDashboard', () => {
 
     render(<ServiceDashboard />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
+    // Wait for initial health check to complete
+    await act(async () => {
+      jest.advanceTimersByTime(100);
     });
+
+    expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
   });
 
   it('shows last updated time', async () => {
@@ -250,9 +259,12 @@ describe('ServiceDashboard', () => {
 
     render(<ServiceDashboard />);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Last updated:/i)).toBeInTheDocument();
+    // Wait for initial health check to complete
+    await act(async () => {
+      jest.advanceTimersByTime(100);
     });
+
+    expect(screen.getByText(/Last updated:/i)).toBeInTheDocument();
   });
 
   it('handles refresh button click', async () => {
@@ -260,16 +272,21 @@ describe('ServiceDashboard', () => {
 
     render(<ServiceDashboard />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
+    // Wait for initial render
+    await act(async () => {
+      jest.advanceTimersByTime(100);
     });
+
+    expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
 
     mockFetch.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalled();
+    // Click refresh button
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
+      jest.advanceTimersByTime(100);
     });
+
+    expect(mockFetch).toHaveBeenCalled();
   });
 });
